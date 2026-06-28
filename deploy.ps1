@@ -2,7 +2,7 @@ $gameDir = 'D:\Heroes3\Heroes3_2026.05.01'
 $packsDst = "$gameDir\_HD3_Data\Packs\战斗价值信息"
 # $PSScriptRoot 是 PowerShell 自动变量，表示当前 deploy.ps1 所在目录。
 # 这里用它定位项目根目录下的 Release 输出目录，避免从不同工作目录运行脚本时路径失效。
-$src = "$PSScriptRoot\..\Release"
+$src = "$PSScriptRoot\Release"
 # $PSScriptRoot 是当前 deploy.ps1 所在目录；pcx 素材目录固定在脚本同级的 pcx 子目录。
 $imgSrc = "$PSScriptRoot\pcx"
 
