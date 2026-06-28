@@ -19,6 +19,7 @@ static struct Config {
     int   text_width;       // 描述文本区宽度（exe patch 值，原0xC8=200）
     int   info_bar_margin_bottom; // 详细信息栏距窗口底部偏移（原26）
     int   window_height;    // 窗口高度（exe patch 值，原0x1E7=487）
+    int   desc_x_offset;   // 描述文字水平偏移（正值右移，原0，默认5）
 } cfg;
 
 static char g_ini_path[MAX_PATH];
@@ -170,4 +171,5 @@ static void ReadConfig()
     cfg.text_width             = GetPrivateProfileIntA("Layout", "TextWidth",         200, f);
     cfg.info_bar_margin_bottom = GetPrivateProfileIntA("Layout", "InfoBarMarginBottom",26, f);
     cfg.window_height          = GetPrivateProfileIntA("Layout", "WindowHeight",      487, f);
+    cfg.desc_x_offset          = GetPrivateProfileIntA("Layout", "DescXOffset",         5, f);
 }

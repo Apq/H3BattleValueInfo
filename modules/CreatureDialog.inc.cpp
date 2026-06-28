@@ -101,7 +101,10 @@ static void AddFightValueLine(_Dlg_* dlg, int fight_value, int count, int count_
     if (!cfg.enabled || !cfg.show_fight_value || !dlg || fight_value <= 0 || count <= 0) return;
     if (FindDlgItem(dlg, 3008) || FindDlgItem(dlg, 3009)) return;
 
-    _DlgStaticText_* label = _DlgStaticText_::Create(20, 41, 130, 17,
+    // 描述文字 X 坐标：原版20 + 可配置偏移
+    int descX = 20 + cfg.desc_x_offset;
+
+    _DlgStaticText_* label = _DlgStaticText_::Create(descX, 41, 130, 17,
         cfg.label_fight_value, "smalfont.fnt", 4, 3009, 0 /*HLEFT*/, 0);
     if (label) dlg->AddItemToOwnArrayList(label);
 
@@ -246,7 +249,7 @@ static int __stdcall Hook_DescTextCreateParams(LoHook* /*h*/, HookContext* c)
 {
     int* sp = (int*)c->esp;
     __try {
-        sp[0] = 20;                 // x
+        sp[0] = 20 + cfg.desc_x_offset;   // x
         sp[1] = cfg.desc_y + 6;     // y
         sp[2] = cfg.text_width;     // width
         sp[3] = cfg.text_height;    // height, true 32-bit value (e.g. 207)
@@ -497,8 +500,8 @@ static void AdjustCreatureInfoDlg(_Dlg_* dlg)
             unsigned short dw = *(unsigned short*)(it + 0x1C);
             short target_y = (short)(cfg.desc_y + 6);
             if (dh >= 20 && dh <= 120) {
-                if (dx != 20 || dy != target_y || dw != (unsigned short)cfg.text_width) {
-                    *(short*)(it + 0x18) = 20;
+                if (dx != (short)(20 + cfg.desc_x_offset) || dy != target_y || dw != (unsigned short)cfg.text_width) {
+                    *(short*)(it + 0x18) = (short)(20 + cfg.desc_x_offset);
                     *(short*)(it + 0x1A) = target_y;
                     *(unsigned short*)(it + 0x1C) = (unsigned short)cfg.text_width;
                 }
@@ -549,7 +552,7 @@ static void AdjustCreatureInfoDlg(_Dlg_* dlg)
                 const char* desc_text = *(const char**)(table + creature_id_for_desc * 0x74 + 0x1C);
                 if (desc_text && desc_text[0]) {
                     _DlgStaticText_* desc = _DlgStaticText_::Create(
-                        20, cfg.desc_y + 6, cfg.text_width, cfg.text_height,
+                        20 + cfg.desc_x_offset, cfg.desc_y + 6, cfg.text_width, cfg.text_height,
                         (char*)desc_text, (char*)"smalfont.fnt", 4, 3010, 0, 0);
                     if (desc) {
                         dlg->AddItemToOwnArrayList(desc);
