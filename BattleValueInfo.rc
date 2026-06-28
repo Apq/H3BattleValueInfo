@@ -1,0 +1,67 @@
+// Microsoft Visual C++ generated resource script.
+//
+#include "resource.h"
+
+#pragma code_page(936)
+
+/////////////////////////////////////////////////////////////////////////////
+// Version
+
+IDR_VERSIONINFO VERSIONINFO
+ FILEVERSION 0,1,2026,628
+ PRODUCTVERSION 0,1,2026,628
+ FILEFLAGSMASK 0x3fL
+#ifdef _DEBUG
+ FILEFLAGS 0x1L
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS 0x40004L
+ FILETYPE 0x2L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "080404b0"
+        BEGIN
+            VALUE "Comments", "生物信息窗口扩展：显示战斗价值、远程力量对比、自定义背景和按钮。"
+            VALUE "CompanyName", "Heroes3 SP 团队"
+            VALUE "FileDescription", "英雄无敌3 HD Mod 生物战斗价值信息插件"
+            VALUE "FileVersion", "0.1.2026.628"
+            VALUE "InternalName", "BattleValueInfo"
+            VALUE "LegalCopyright", "Copyright (C) Apq"
+            VALUE "OriginalFilename", "BattleValueInfo.dll"
+            VALUE "ProductName", "BattleValueInfo"
+            VALUE "ProductVersion", "0.1.2026.628"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x804, 1200
+    END
+END
+
+
+#ifdef APSTUDIO_INVOKED
+/////////////////////////////////////////////////////////////////////////////
+//
+// TEXTINCLUDE
+//
+
+1 TEXTINCLUDE
+BEGIN
+    "resource.h\0"
+END
+
+2 TEXTINCLUDE
+BEGIN
+    "\0"
+END
+
+3 TEXTINCLUDE
+BEGIN
+    "\r\n"
+    "\0"
+END
+
+#endif    // APSTUDIO_INVOKED
