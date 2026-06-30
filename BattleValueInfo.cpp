@@ -1,7 +1,7 @@
 // BattleValueInfo.cpp
-// 英雄无敌3 SoD 插件：部队战斗价值 + 双方远程力量对比
-// 目标版本：Shadow of Death（SOD = 0xFFFFE403），仅 x86
-// 注意：hook 地址均为原版 SoD 地址；当前在 HotA + SoD_SP 环境验证。
+// 英雄无敌3 SoD 插件：部队战斗价值显示 + 双方远程力量对比。
+// 目标版本：Shadow of Death（SOD = 0xFFFFE403），仅 x86。
+// 依赖 MegaDesc 负责生物信息窗口扩展、背景、按钮、描述区布局。
 
 #include "homm3.h"
 #include <stdarg.h>
@@ -10,10 +10,7 @@
 Patcher*         _P  = nullptr;
 PatcherInstance* _PI = nullptr;
 
-// Implementation is split into module fragments and included in order.
-// These are .inc.cpp files intentionally included by this translation unit to keep
-// patcher globals/static helpers identical to the historical single-file build.
+// 模块按顺序包含到同一个翻译单元，保证 patcher 全局对象和静态辅助函数共享同一份状态。
 #include "modules/ConfigLog.inc.cpp"
 #include "modules/CreatureDialog.inc.cpp"
-#include "modules/PatchesAndImages.inc.cpp"
 #include "modules/Entry.inc.cpp"

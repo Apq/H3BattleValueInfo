@@ -1,38 +1,50 @@
-# BattleValueInfo — 战场部队战斗价值显示插件
+# BattleValueInfo — 英雄无敌3 战斗价值信息插件
 
 ## 简介
 
-BattleValueInfo 是一个《英雄无敌3》HD Mod 插件，在生物信息窗口中追加显示战斗价值，并提供右键空白格时的远程力量对比。
+BattleValueInfo 是一个《英雄无敌3》HD Mod 插件，在生物信息窗口中追加显示战斗价值，并可在战斗中右键空白格显示双方远程力量对比。
+
+本插件依赖 MegaDesc：窗口加高、背景替换、按钮替换、描述区扩展由 MegaDesc 负责。
 
 ## 功能
 
-### 功能一：部队战斗价值
+- 生物信息窗口追加显示总战斗价值：`单只 fight_value × 当前数量`
+- 可选显示剩余比例：`总战斗价值(当前数量百分比)`
+- 战斗中右键空白格时显示双方远程兵种力量对比
 
-- 右键部队 → 原信息窗口底部追加 `战斗价值：XXXXX`
-- 窗口高度从原版 311 扩展到 487，容纳描述文本区扩大
+## 配置
 
-### 功能二：双方远程力量对比
+见 `BattleValueInfo.ini`：
 
-- 右键**空白六宫格**（非部队所在格）→ 弹出独立对比窗口
-- 统计双方所有远程兵种的战斗价值总和
+```ini
+[General]
+Enabled=1
 
-### 配置控制
+[CreatureInfo]
+ShowFightValue=1
+ShowRemainingPercent=0
 
-- INI 文件 `[General] Enabled` 为总开关
-- `[Layout]` 控制窗口尺寸和文本布局
-- `[Format]` 自定义显示标签文字
+[RangedPower]
+ShowRangedPower=1
+
+[Format]
+LabelFightValue=Fight Value
+LabelOurSide=Ours
+LabelEnemySide=Enemy
+```
 
 ## 依赖
 
-仅依赖原版游戏 EXE + HD Mod 框架（`patcher_x86.hpp`）。不依赖 ZCN2.dll、H3.TextColor.dll、ERA、SoD_SP 或其他插件。
+- HD Mod / patcher_x86
+- MegaDesc 插件项目
 
-## 编译要求
+## 编译
 
-- Visual Studio（v145 工具集）
-- 仅支持 x86（32 位）
-- 结构成员对齐：1 字节（/Zp1）
-- 源码结构：主文件 `BattleValueInfo.cpp` + 4 个 `modules/*.inc.cpp`（通过 `#include` 单翻译单元编译）
+- Visual Studio v145 工具集
+- Release | Win32
+- 仅支持 x86
+- `/Zp1` 结构对齐
 
 ## 安装
 
-将编译生成的 `BattleValueInfo.dll` 放入 HD Mod 的 `_HD3_Data\Packs\战斗价值信息\` 目录，在 HD Launcher 中启用插件。
+先部署 MegaDesc，再部署本插件。将生成的 `BattleValueInfo.dll` 与 `BattleValueInfo.ini` 放入 HD Mod 的 `_HD3_Data\Packs\战斗价值信息\` 目录，在 HD Launcher 中启用插件。

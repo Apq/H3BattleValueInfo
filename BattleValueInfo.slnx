@@ -1,7 +1,8 @@
 <Solution>
   <Configurations>
-    <Platform Name="x64" />
-    <Platform Name="x86" />
+    <BuildType Name="Release" />
+    <Platform Name="Win32" />
   </Configurations>
-  <Project Path="BattleValueInfo.vcxproj" Id="378e086a-f308-43cd-9d88-660f0a452b81" />
+  <Project Path="..\H3MegaDesc\MegaDesc.vcxproj" Id="378e086a-f308-43cd-9d88-660f0a452b81" />
+  <Project Path="BattleValueInfo.vcxproj" Id="8d11cc7d-0ff2-49a6-b3cc-76f8bdb4dfd2" />
 </Solution>

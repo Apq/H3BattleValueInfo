@@ -8,18 +8,6 @@ static struct Config {
     char  label_fight_value[64];
     char  label_ours[64];
     char  label_enemy[64];
-    char  bg_file[64];       // 背景 PCX 文件名（插件目录\pcx 下）；建议 ≤11 字符（含 .pcx），兼容 HoMM3 12字节资源名缓冲。
-    // 布局参数（从 INI 读取，方便调整）
-    int   shift;            // 元素下移量（默认13）
-    int   btn_margin_bottom;// 确认按钮距窗口底部偏移（原硬编码40）
-    int   dismiss_btn_margin_bottom;  // 解雇按钮距窗口底部偏移（默认90）
-    int   spell_btn_margin_bottom;    // 魔法书/施法按钮距窗口底部偏移（默认132）
-    int   desc_y;           // 描述文字框 Y 坐标（原硬编码232+SHIFT=248）
-    int   text_height;      // 描述文本区高度（默认207，原版105）
-    int   text_width;       // 描述文本区宽度（exe patch 值，原0xC8=200）
-    int   info_bar_margin_bottom; // 详细信息栏距窗口底部偏移（原26）
-    int   window_height;    // 窗口高度（exe patch 值，原0x1E7=487）
-    int   desc_x_offset;   // 描述文字水平偏移（正值右移，原0，默认5）
 } cfg;
 
 static char g_ini_path[MAX_PATH];
@@ -159,17 +147,4 @@ static void ReadConfig()
     GetPrivateProfileStringA("Format", "LabelFightValue", "Fight Value", cfg.label_fight_value, sizeof(cfg.label_fight_value), f);
     GetPrivateProfileStringA("Format", "LabelOurSide",   "Ours",  cfg.label_ours,  sizeof(cfg.label_ours),  f);
     GetPrivateProfileStringA("Format", "LabelEnemySide", "Enemy", cfg.label_enemy, sizeof(cfg.label_enemy), f);
-    GetPrivateProfileStringA("Images", "BackgroundPcx", "bv_bgA.pcx", cfg.bg_file, sizeof(cfg.bg_file), f);
-    if (!cfg.bg_file[0]) lstrcpynA(cfg.bg_file, "bv_bgA.pcx", sizeof(cfg.bg_file));
-    // 布局参数
-    cfg.shift                  = GetPrivateProfileIntA("Layout", "Shift",             13,  f);
-    cfg.btn_margin_bottom      = GetPrivateProfileIntA("Layout", "BtnMarginBottom",   40,  f);
-    cfg.dismiss_btn_margin_bottom = GetPrivateProfileIntA("Layout", "DismissBtnMarginBottom", 90, f);
-    cfg.spell_btn_margin_bottom   = GetPrivateProfileIntA("Layout", "SpellBtnMarginBottom",  132, f);
-    cfg.desc_y                 = GetPrivateProfileIntA("Layout", "DescY",             248, f);
-    cfg.text_height            = GetPrivateProfileIntA("Layout", "TextHeight",        207, f);
-    cfg.text_width             = GetPrivateProfileIntA("Layout", "TextWidth",         200, f);
-    cfg.info_bar_margin_bottom = GetPrivateProfileIntA("Layout", "InfoBarMarginBottom",26, f);
-    cfg.window_height          = GetPrivateProfileIntA("Layout", "WindowHeight",      487, f);
-    cfg.desc_x_offset          = GetPrivateProfileIntA("Layout", "DescXOffset",         5, f);
 }
