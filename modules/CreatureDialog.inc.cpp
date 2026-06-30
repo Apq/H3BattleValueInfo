@@ -498,10 +498,6 @@ static _Pcx8_* LoadPanelImageAsPcx8()
 }
 
 static _Pcx8_* s_ranged_panel_bg = nullptr;
-static _Pcx8_* s_ranged_panel_black = nullptr;
-static unsigned short* s_ranged_panel_bg_backup = nullptr;
-static int s_ranged_panel_bg_backup_w = 0;
-static int s_ranged_panel_bg_backup_h = 0;
 static _Dlg_* s_last_battle_dlg = nullptr;
 static _BattleMgr_* s_last_battle_mgr = nullptr;
 static bool s_ranged_panel_active = true;
@@ -510,134 +506,6 @@ static int s_ranged_panel_last_x = -1;
 static int s_ranged_panel_last_y = -1;
 static int s_ranged_panel_last_w = 0;
 static int s_ranged_panel_last_h = 0;
-static unsigned short* s_ranged_panel_clean_backup = nullptr;
-static int s_ranged_panel_clean_x = -1;
-static int s_ranged_panel_clean_y = -1;
-static int s_ranged_panel_clean_w = 0;
-static int s_ranged_panel_clean_h = 0;
-static bool s_ranged_panel_clean_valid = false;
-
-static _Pcx8_* CreateBlackPanelPcx8(int w, int h)
-{
-    if (w <= 0 || h <= 0) return nullptr;
-    unsigned char* rgb = (unsigned char*)calloc(w * h * 3, 1);
-    if (!rgb) return nullptr;
-    _Pcx8_* palSrc = o_LoadPcx8((char*)"DlgBluBk.PCX");
-    _Pcx8_* pcx8 = palSrc ? QuantizeRgbAsPcx8(rgb, w, h, palSrc, "bv_panel_black") : nullptr;
-    if (palSrc) palSrc->DerefOrDestruct();
-    free(rgb);
-    return pcx8;
-}
-
-static void DrawBlackPanelRect()
-{
-    _Pcx16_* scr = o_WndMgr ? o_WndMgr->screen_pcx16 : nullptr;
-    if (!scr || s_ranged_panel_last_w <= 0 || s_ranged_panel_last_h <= 0) return;
-
-    // 优先用 DrawSurface16 恢复之前保存的干净背景
-    if (s_ranged_panel_bg_backup && s_ranged_panel_bg_backup_w == s_ranged_panel_last_w
-        && s_ranged_panel_bg_backup_h == s_ranged_panel_last_h) {
-        scr->DrawSurface16(0, 0, s_ranged_panel_last_w, s_ranged_panel_last_h,
-            (int)s_ranged_panel_bg_backup,
-            s_ranged_panel_last_x, s_ranged_panel_last_y,
-            s_ranged_panel_last_w, s_ranged_panel_last_h,
-            s_ranged_panel_last_w * 2, -1);
-        o_WndMgr->RedrawScreenRect(s_ranged_panel_last_x, s_ranged_panel_last_y,
-            s_ranged_panel_last_w, s_ranged_panel_last_h);
-        WriteLog("[Diag] restored bg via DrawSurface16 (%d,%d,%d,%d)",
-            s_ranged_panel_last_x, s_ranged_panel_last_y, s_ranged_panel_last_w, s_ranged_panel_last_h);
-        return;
-    }
-
-    // fallback: 纯黑 Pcx8
-    if (!s_ranged_panel_black || s_ranged_panel_black->width != s_ranged_panel_last_w || s_ranged_panel_black->height != s_ranged_panel_last_h) {
-        if (s_ranged_panel_black) { s_ranged_panel_black->DerefOrDestruct(); s_ranged_panel_black = nullptr; }
-        s_ranged_panel_black = CreateBlackPanelPcx8(s_ranged_panel_last_w, s_ranged_panel_last_h);
-    }
-    if (s_ranged_panel_black) {
-        s_ranged_panel_black->DrawToPcx16(0, 0, s_ranged_panel_last_w, s_ranged_panel_last_h,
-            scr, s_ranged_panel_last_x, s_ranged_panel_last_y, FALSE);
-        o_WndMgr->RedrawScreenRect(s_ranged_panel_last_x, s_ranged_panel_last_y,
-            s_ranged_panel_last_w, s_ranged_panel_last_h);
-        WriteLog("[Diag] DrawBlackPanelRect via DrawToPcx16 (%d,%d,%d,%d)",
-            s_ranged_panel_last_x, s_ranged_panel_last_y, s_ranged_panel_last_w, s_ranged_panel_last_h);
-    }
-}
-
-static void FreeRangedPanelCleanBackup()
-{
-    if (s_ranged_panel_clean_backup) free(s_ranged_panel_clean_backup);
-    s_ranged_panel_clean_backup = nullptr;
-    s_ranged_panel_clean_valid = false;
-    s_ranged_panel_clean_x = -1;
-    s_ranged_panel_clean_y = -1;
-    s_ranged_panel_clean_w = 0;
-    s_ranged_panel_clean_h = 0;
-}
-
-static void CaptureRangedPanelCleanArea(_Pcx16_* screen, int x, int y, int w, int h)
-{
-    if (s_ranged_panel_clean_valid) return;
-    if (!screen || !screen->buffer || x < 0 || y < 0 || w <= 0 || h <= 0) return;
-    if (x + w > (int)screen->width || y + h > (int)screen->height) return;
-
-    int count = w * h;
-    s_ranged_panel_clean_backup = (unsigned short*)malloc(count * sizeof(unsigned short));
-    if (!s_ranged_panel_clean_backup) return;
-
-    for (int row = 0; row < h; ++row) {
-        unsigned short* src = (unsigned short*)((char*)screen->buffer + (y + row) * screen->scanline_size) + x;
-        memcpy(s_ranged_panel_clean_backup + row * w, src, w * sizeof(unsigned short));
-    }
-    s_ranged_panel_clean_x = x;
-    s_ranged_panel_clean_y = y;
-    s_ranged_panel_clean_w = w;
-    s_ranged_panel_clean_h = h;
-    s_ranged_panel_clean_valid = true;
-    WriteLog("[Diag] captured clean panel area (%d,%d,%d,%d)", x, y, w, h);
-}
-
-static void RestoreRangedPanelCleanArea()
-{
-    _Pcx16_* screen = o_WndMgr ? o_WndMgr->screen_pcx16 : nullptr;
-    if (!s_ranged_panel_clean_valid || !s_ranged_panel_clean_backup || !screen || !screen->buffer) return;
-    int x = s_ranged_panel_clean_x;
-    int y = s_ranged_panel_clean_y;
-    int w = s_ranged_panel_clean_w;
-    int h = s_ranged_panel_clean_h;
-    if (x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > (int)screen->width || y + h > (int)screen->height) return;
-
-    for (int row = 0; row < h; ++row) {
-        unsigned short* dst = (unsigned short*)((char*)screen->buffer + (y + row) * screen->scanline_size) + x;
-        memcpy(dst, s_ranged_panel_clean_backup + row * w, w * sizeof(unsigned short));
-    }
-    if (o_WndMgr) o_WndMgr->RedrawScreenRect(x, y, w, h);
-    WriteLog("[Diag] restored clean panel area (%d,%d,%d,%d)", x, y, w, h);
-}
-
-static void ClearRangedPanelArea()
-{
-    RestoreRangedPanelCleanArea();
-    if (!o_WndMgr || s_ranged_panel_last_x < 0 || s_ranged_panel_last_y < 0 ||
-        s_ranged_panel_last_w <= 0 || s_ranged_panel_last_h <= 0) return;
-    o_WndMgr->RedrawScreenRect(s_ranged_panel_last_x, s_ranged_panel_last_y,
-        s_ranged_panel_last_w, s_ranged_panel_last_h);
-}
-
-static void FillScreenRect16(_Pcx16_* screen, int x, int y, int w, int h, _word_ color)
-{
-    if (!screen || !screen->buffer || w <= 0 || h <= 0) return;
-    if (x < 0) { w += x; x = 0; }
-    if (y < 0) { h += y; y = 0; }
-    if (x + w > (int)screen->width) w = (int)screen->width - x;
-    if (y + h > (int)screen->height) h = (int)screen->height - y;
-    if (w <= 0 || h <= 0) return;
-
-    for (int row = 0; row < h; ++row) {
-        _word_* dst = (_word_*)((char*)screen->buffer + (y + row) * screen->scanline_size) + x;
-        for (int col = 0; col < w; ++col) dst[col] = color;
-    }
-}
 
 static void HideRangedPanelItems(_Dlg_* dlg)
 {
@@ -713,6 +581,7 @@ static _Fnt_* GetRangedPanelTextFont()
 static bool s_battle_area_logged = false;
 static int s_diag_battle_redraw_count = 0;
 static int s_diag_panel_draw_count = 0;
+static bool s_panel_was_drawn = false; // 上一帧是否画面板，用于战斗结束时清理
 
 // ---- 脏标记：只在战场状态变化时才重新计算 ----
 static unsigned int s_stack_checksum = 0;
@@ -766,7 +635,7 @@ static void DrawRangedPanelToScreen(_BattleMgr_* mgr)
         s_ranged_panel_active = true;
         s_stack_checksum = 0;
         memset(s_cached_text, 0, sizeof(s_cached_text));
-        FreeRangedPanelCleanBackup();
+        s_panel_was_drawn = false;
     }
 
     // 新战斗（dlg 变化）时重新启用并重新加载背景。
@@ -776,13 +645,20 @@ static void DrawRangedPanelToScreen(_BattleMgr_* mgr)
         s_battle_end_logged = false;
         s_stack_checksum = 0;
         memset(s_cached_text, 0, sizeof(s_cached_text));
-        FreeRangedPanelCleanBackup();
+        s_panel_was_drawn = false;
         if (s_ranged_panel_bg) { s_ranged_panel_bg->DerefOrDestruct(); s_ranged_panel_bg = nullptr; }
     }
 
-    if (!s_ranged_panel_active) return;
+    if (!s_ranged_panel_active) {
+        s_panel_was_drawn = false;
+        return;
+    }
     if (s_ranged_panel_suppressed_for_result) return;
-    if (IsBattleEnded(mgr)) { DestroyRangedPanel(); return; }
+    if (IsBattleEnded(mgr)) {
+        s_panel_was_drawn = false;
+        DestroyRangedPanel();
+        return;
+    }
 
     if (!s_battle_area_logged) {
         s_battle_area_logged = true;
@@ -819,27 +695,10 @@ static void DrawRangedPanelToScreen(_BattleMgr_* mgr)
         s_ranged_panel_last_y = y;
         s_ranged_panel_last_w = draw_w;
         s_ranged_panel_last_h = draw_h;
-        // 备份面板区域的干净背景（用 DrawSurface16 同款坐标，确保一致性）
-        if (!s_ranged_panel_bg_backup || s_ranged_panel_bg_backup_w != draw_w || s_ranged_panel_bg_backup_h != draw_h) {
-            if (s_ranged_panel_bg_backup) free(s_ranged_panel_bg_backup);
-            s_ranged_panel_bg_backup = (unsigned short*)malloc(draw_w * draw_h * sizeof(unsigned short));
-            if (s_ranged_panel_bg_backup) {
-                s_ranged_panel_bg_backup_w = draw_w;
-                s_ranged_panel_bg_backup_h = draw_h;
-                for (int row = 0; row < draw_h; ++row) {
-                    unsigned short* src = (unsigned short*)((char*)screen->buffer + (y + row) * screen->scanline_size) + x;
-                    memcpy(s_ranged_panel_bg_backup + row * draw_w, src, draw_w * sizeof(unsigned short));
-                }
-                WriteLog("[RangedPanel] captured bg backup (%d,%d,%d,%d)", x, y, draw_w, draw_h);
-            }
-        }
+        // 画面板背景
         s_ranged_panel_bg->DrawToPcx16(0, 0, draw_w, draw_h, screen, x, y, FALSE);
-        static bool s_panel_draw_rect_logged = false;
-        if (!s_panel_draw_rect_logged) {
-            s_panel_draw_rect_logged = true;
-            WriteLog("[RangedPanel] actual draw rect=(%d,%d,%d,%d), image=%dx%d, cfg=%dx%d",
-                x, y, draw_w, draw_h, bw, bh, panel_w, panel_h);
-        }
+        s_panel_was_drawn = true;
+
     }
 
     unsigned int checksum = ComputeStackChecksum(mgr);
@@ -877,6 +736,14 @@ static void UpdateRangedPanel(_BattleMgr_* mgr)
 }
 
 
+static void CleanPanelBeforeResult()
+{
+    s_panel_was_drawn = false;
+    s_ranged_panel_suppressed_for_result = true;
+    s_ranged_panel_active = false;
+    if (s_ranged_panel_bg) { s_ranged_panel_bg->DerefOrDestruct(); s_ranged_panel_bg = nullptr; }
+}
+
 int __stdcall Hook_BattleRedraw(HiHook* h, _BattleMgr_* mgr, _bool8_ flip, _bool8_ set_battle_redraws, _bool8_ use_battle_redraws, int waiting_time, _bool8_ redraw_background, _bool8_ wait)
 {
     CALL_7(void, __thiscall, h->GetDefaultFunc(), mgr, flip, set_battle_redraws, use_battle_redraws, waiting_time, redraw_background, wait);
@@ -884,32 +751,39 @@ int __stdcall Hook_BattleRedraw(HiHook* h, _BattleMgr_* mgr, _bool8_ flip, _bool
     return 0;
 }
 
+// LoHook: 在 0x476DA0 (AI 决策主函数) 内部、调用 CPResult 之前拦截。
+// 0x477200 和 0x4772B0 是 push 参数序列的起始，我们在 LoHook 里提前清屏。
+int __stdcall Hook_PreCombatResult_A(LoHook* h, HookContext* c)
+{
+    WriteLog("[RangedPanel] PreCombatResult_A (0x477200) panel_was_drawn=%d", s_panel_was_drawn ? 1 : 0);
+    CleanPanelBeforeResult();
+    return EXEC_DEFAULT;
+}
+
+int __stdcall Hook_PreCombatResult_B(LoHook* h, HookContext* c)
+{
+    WriteLog("[RangedPanel] PreCombatResult_B (0x4772B0) panel_was_drawn=%d", s_panel_was_drawn ? 1 : 0);
+    CleanPanelBeforeResult();
+    return EXEC_DEFAULT;
+}
+
 void __stdcall Hook_CombatResultDlg(HiHook* h, void* resultDlg, int a1, int a2, int a3, int a4, int a5, int a6)
 {
-    WriteLog("[Diag] 0x46FE20 CPResult construct this=%p args=(%d,%d,%d,%d,%d,%d) active=%d lastPanel=(%d,%d,%d,%d)",
-        resultDlg, a1, a2, a3, a4, a5, a6, s_ranged_panel_active ? 1 : 0,
+    WriteLog("[Diag] 0x46FE20 CPResult construct active=%d panel_was_drawn=%d lastPanel=(%d,%d,%d,%d)",
+        s_ranged_panel_active ? 1 : 0, s_panel_was_drawn ? 1 : 0,
         s_ranged_panel_last_x, s_ranged_panel_last_y, s_ranged_panel_last_w, s_ranged_panel_last_h);
-    // CPResult 构造期间可能截取/保存当前屏幕作为结果界面底图；必须在构造前清掉面板旧像素。
-    if (o_BattleMgr && o_BattleMgr->dlg && s_ranged_panel_last_w > 0 && s_ranged_panel_last_h > 0) {
-        s_ranged_panel_suppressed_for_result = true;
-        s_ranged_panel_active = false;
-        if (s_ranged_panel_bg) { s_ranged_panel_bg->DerefOrDestruct(); s_ranged_panel_bg = nullptr; }
-        DrawBlackPanelRect();
-    }
+    s_ranged_panel_suppressed_for_result = true;
+    s_ranged_panel_active = false;
+    if (s_ranged_panel_bg) { s_ranged_panel_bg->DerefOrDestruct(); s_ranged_panel_bg = nullptr; }
+
     CALL_7(void, __thiscall, h->GetDefaultFunc(), resultDlg, a1, a2, a3, a4, a5, a6);
 }
 
 void __stdcall Hook_CombatResultRun(HiHook* h, void* resultDlg)
 {
-    WriteLog("[Diag] 0x4716C0 CPResult run this=%p active=%d currentDlg=%p battleDlg=%p lastPanel=(%d,%d,%d,%d)",
-        resultDlg, s_ranged_panel_active ? 1 : 0, o_CurrentDlg, o_BattleMgr ? o_BattleMgr->dlg : nullptr,
-        s_ranged_panel_last_x, s_ranged_panel_last_y, s_ranged_panel_last_w, s_ranged_panel_last_h);
-    // 进入战斗伤亡界面前，先禁止面板重画，再刷新它占用的屏幕区域。
+    // 结果窗口是模态的；这里只停止面板后续重绘，不再尝试擦外侧旧像素。
     s_ranged_panel_suppressed_for_result = true;
     s_ranged_panel_active = false;
-    {
-        DrawBlackPanelRect();
-    }
     CALL_1(void, __thiscall, h->GetDefaultFunc(), resultDlg);
 }
 

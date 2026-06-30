@@ -10,6 +10,9 @@ static void StartPlugin()
 
     // 战场顶部常驻远程力量面板。
     _PI->WriteHiHook(0x493FC0, SPLICE_, EXTENDED_, THISCALL_, Hook_BattleRedraw);
+    // 在 AI 决策函数内部、CPResult 调用前清屏。
+    _PI->WriteLoHook(0x477200, Hook_PreCombatResult_A);
+    _PI->WriteLoHook(0x4772B0, Hook_PreCombatResult_B);
     // 战斗结果界面（CPResult.pcx）运行/关闭时控制远程面板生命周期。
     _PI->WriteHiHook(0x46FE20, SPLICE_, EXTENDED_, THISCALL_, Hook_CombatResultDlg);
     _PI->WriteHiHook(0x4716C0, SPLICE_, EXTENDED_, THISCALL_, Hook_CombatResultRun);
