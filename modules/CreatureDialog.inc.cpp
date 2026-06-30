@@ -498,6 +498,10 @@ static _Pcx8_* LoadPanelImageAsPcx8()
 }
 
 static _Pcx8_* s_ranged_panel_bg = nullptr;
+static _Pcx8_* s_ranged_panel_black = nullptr;
+static unsigned short* s_ranged_panel_bg_backup = nullptr;
+static int s_ranged_panel_bg_backup_w = 0;
+static int s_ranged_panel_bg_backup_h = 0;
 static _Dlg_* s_last_battle_dlg = nullptr;
 static _BattleMgr_* s_last_battle_mgr = nullptr;
 static bool s_ranged_panel_active = true;
@@ -512,6 +516,53 @@ static int s_ranged_panel_clean_y = -1;
 static int s_ranged_panel_clean_w = 0;
 static int s_ranged_panel_clean_h = 0;
 static bool s_ranged_panel_clean_valid = false;
+
+static _Pcx8_* CreateBlackPanelPcx8(int w, int h)
+{
+    if (w <= 0 || h <= 0) return nullptr;
+    unsigned char* rgb = (unsigned char*)calloc(w * h * 3, 1);
+    if (!rgb) return nullptr;
+    _Pcx8_* palSrc = o_LoadPcx8((char*)"DlgBluBk.PCX");
+    _Pcx8_* pcx8 = palSrc ? QuantizeRgbAsPcx8(rgb, w, h, palSrc, "bv_panel_black") : nullptr;
+    if (palSrc) palSrc->DerefOrDestruct();
+    free(rgb);
+    return pcx8;
+}
+
+static void DrawBlackPanelRect()
+{
+    _Pcx16_* scr = o_WndMgr ? o_WndMgr->screen_pcx16 : nullptr;
+    if (!scr || s_ranged_panel_last_w <= 0 || s_ranged_panel_last_h <= 0) return;
+
+    // 优先用 DrawSurface16 恢复之前保存的干净背景
+    if (s_ranged_panel_bg_backup && s_ranged_panel_bg_backup_w == s_ranged_panel_last_w
+        && s_ranged_panel_bg_backup_h == s_ranged_panel_last_h) {
+        scr->DrawSurface16(0, 0, s_ranged_panel_last_w, s_ranged_panel_last_h,
+            (int)s_ranged_panel_bg_backup,
+            s_ranged_panel_last_x, s_ranged_panel_last_y,
+            s_ranged_panel_last_w, s_ranged_panel_last_h,
+            s_ranged_panel_last_w * 2, -1);
+        o_WndMgr->RedrawScreenRect(s_ranged_panel_last_x, s_ranged_panel_last_y,
+            s_ranged_panel_last_w, s_ranged_panel_last_h);
+        WriteLog("[Diag] restored bg via DrawSurface16 (%d,%d,%d,%d)",
+            s_ranged_panel_last_x, s_ranged_panel_last_y, s_ranged_panel_last_w, s_ranged_panel_last_h);
+        return;
+    }
+
+    // fallback: 纯黑 Pcx8
+    if (!s_ranged_panel_black || s_ranged_panel_black->width != s_ranged_panel_last_w || s_ranged_panel_black->height != s_ranged_panel_last_h) {
+        if (s_ranged_panel_black) { s_ranged_panel_black->DerefOrDestruct(); s_ranged_panel_black = nullptr; }
+        s_ranged_panel_black = CreateBlackPanelPcx8(s_ranged_panel_last_w, s_ranged_panel_last_h);
+    }
+    if (s_ranged_panel_black) {
+        s_ranged_panel_black->DrawToPcx16(0, 0, s_ranged_panel_last_w, s_ranged_panel_last_h,
+            scr, s_ranged_panel_last_x, s_ranged_panel_last_y, FALSE);
+        o_WndMgr->RedrawScreenRect(s_ranged_panel_last_x, s_ranged_panel_last_y,
+            s_ranged_panel_last_w, s_ranged_panel_last_h);
+        WriteLog("[Diag] DrawBlackPanelRect via DrawToPcx16 (%d,%d,%d,%d)",
+            s_ranged_panel_last_x, s_ranged_panel_last_y, s_ranged_panel_last_w, s_ranged_panel_last_h);
+    }
+}
 
 static void FreeRangedPanelCleanBackup()
 {
@@ -662,6 +713,25 @@ static _Fnt_* GetRangedPanelTextFont()
 static bool s_battle_area_logged = false;
 static int s_diag_battle_redraw_count = 0;
 static int s_diag_panel_draw_count = 0;
+
+// ---- 脏标记：只在战场状态变化时才重新计算 ----
+static unsigned int s_stack_checksum = 0;
+static char s_cached_text[6][64] = {{0}};
+
+static unsigned int ComputeStackChecksum(_BattleMgr_* mgr)
+{
+    if (!mgr) return 0;
+    unsigned int hash = 2166136261u; // FNV offset
+    for (int side = 0; side < 2; ++side)
+        for (int slot = 0; slot < 21; ++slot) {
+            const _BattleStack_& s = mgr->stack[side][slot];
+            hash ^= (unsigned)(s.count_current & 0xFFFF);
+            hash *= 16777619u;
+            hash ^= (unsigned)(s.creature_id & 0xFF);
+            hash *= 16777619u;
+        }
+    return hash;
+}
 static void LogDlgBrief(const char* tag, _Dlg_* dlg)
 {
     if (!dlg) {
@@ -694,6 +764,8 @@ static void DrawRangedPanelToScreen(_BattleMgr_* mgr)
         s_last_battle_mgr = mgr;
         s_ranged_panel_suppressed_for_result = false;
         s_ranged_panel_active = true;
+        s_stack_checksum = 0;
+        memset(s_cached_text, 0, sizeof(s_cached_text));
         FreeRangedPanelCleanBackup();
     }
 
@@ -702,6 +774,8 @@ static void DrawRangedPanelToScreen(_BattleMgr_* mgr)
         s_last_battle_dlg = dlg;
         s_ranged_panel_active = true;
         s_battle_end_logged = false;
+        s_stack_checksum = 0;
+        memset(s_cached_text, 0, sizeof(s_cached_text));
         FreeRangedPanelCleanBackup();
         if (s_ranged_panel_bg) { s_ranged_panel_bg->DerefOrDestruct(); s_ranged_panel_bg = nullptr; }
     }
@@ -745,6 +819,20 @@ static void DrawRangedPanelToScreen(_BattleMgr_* mgr)
         s_ranged_panel_last_y = y;
         s_ranged_panel_last_w = draw_w;
         s_ranged_panel_last_h = draw_h;
+        // 备份面板区域的干净背景（用 DrawSurface16 同款坐标，确保一致性）
+        if (!s_ranged_panel_bg_backup || s_ranged_panel_bg_backup_w != draw_w || s_ranged_panel_bg_backup_h != draw_h) {
+            if (s_ranged_panel_bg_backup) free(s_ranged_panel_bg_backup);
+            s_ranged_panel_bg_backup = (unsigned short*)malloc(draw_w * draw_h * sizeof(unsigned short));
+            if (s_ranged_panel_bg_backup) {
+                s_ranged_panel_bg_backup_w = draw_w;
+                s_ranged_panel_bg_backup_h = draw_h;
+                for (int row = 0; row < draw_h; ++row) {
+                    unsigned short* src = (unsigned short*)((char*)screen->buffer + (y + row) * screen->scanline_size) + x;
+                    memcpy(s_ranged_panel_bg_backup + row * draw_w, src, draw_w * sizeof(unsigned short));
+                }
+                WriteLog("[RangedPanel] captured bg backup (%d,%d,%d,%d)", x, y, draw_w, draw_h);
+            }
+        }
         s_ranged_panel_bg->DrawToPcx16(0, 0, draw_w, draw_h, screen, x, y, FALSE);
         static bool s_panel_draw_rect_logged = false;
         if (!s_panel_draw_rect_logged) {
@@ -754,25 +842,31 @@ static void DrawRangedPanelToScreen(_BattleMgr_* mgr)
         }
     }
 
-    int ranged[2] = { CalcRangedUnitsPower(mgr, 0), CalcRangedUnitsPower(mgr, 1) };
-    int spell[2] = { CalcHeroSpellPower(mgr, 0), CalcHeroSpellPower(mgr, 1) };
-    int total[2] = { ranged[0] + spell[0], ranged[1] + spell[1] };
+    unsigned int checksum = ComputeStackChecksum(mgr);
+    if (checksum != s_stack_checksum || !s_cached_text[0][0]) {
+        s_stack_checksum = checksum;
+        int ranged[2] = { CalcRangedUnitsPower(mgr, 0), CalcRangedUnitsPower(mgr, 1) };
+        int spell[2] = { CalcHeroSpellPower(mgr, 0), CalcHeroSpellPower(mgr, 1) };
+        int total[2] = { ranged[0] + spell[0], ranged[1] + spell[1] };
 
-    static char text[6][64];
-    _snprintf(text[0], sizeof(text[0]) - 1, "%d", ranged[0]);
-    _snprintf(text[1], sizeof(text[1]) - 1, "%d", ranged[1]);
-    _snprintf(text[2], sizeof(text[2]) - 1, "%d", spell[0]);
-    _snprintf(text[3], sizeof(text[3]) - 1, "%d", spell[1]);
-    _snprintf(text[4], sizeof(text[4]) - 1, "%d", total[0]);
-    _snprintf(text[5], sizeof(text[5]) - 1, "%d", total[1]);
-    for (int i = 0; i < 6; ++i) text[i][sizeof(text[i]) - 1] = 0;
+        _snprintf(s_cached_text[0], sizeof(s_cached_text[0]) - 1, "%d", ranged[0]);
+        _snprintf(s_cached_text[1], sizeof(s_cached_text[1]) - 1, "%d", ranged[1]);
+        _snprintf(s_cached_text[2], sizeof(s_cached_text[2]) - 1, "%d", spell[0]);
+        _snprintf(s_cached_text[3], sizeof(s_cached_text[3]) - 1, "%d", spell[1]);
+        _snprintf(s_cached_text[4], sizeof(s_cached_text[4]) - 1, "%d", total[0]);
+        _snprintf(s_cached_text[5], sizeof(s_cached_text[5]) - 1, "%d", total[1]);
+        for (int i = 0; i < 6; ++i) s_cached_text[i][sizeof(s_cached_text[i]) - 1] = 0;
+
+        WriteLog("[RangedPanel] recalculated checksum=%u ranged=(%d,%d) spell=(%d,%d) total=(%d,%d)",
+            checksum, ranged[0], ranged[1], spell[0], spell[1], total[0], total[1]);
+    }
 
     _Fnt_* font = GetRangedPanelTextFont();
     if (font) {
         for (int row = 0; row < 3; ++row) {
             int yy = y + cfg.row_y[row];
-            font->DrawTextToPcx16(text[row * 2], screen, left_x, yy, col_w, text_h, (_byte_)cfg.ranged_panel_text_color, 2, 0);
-            font->DrawTextToPcx16(text[row * 2 + 1], screen, right_x, yy, col_w, text_h, (_byte_)cfg.ranged_panel_text_color, 0, 0);
+            font->DrawTextToPcx16(s_cached_text[row * 2], screen, left_x, yy, col_w, text_h, (_byte_)cfg.ranged_panel_text_color, 2, 0);
+            font->DrawTextToPcx16(s_cached_text[row * 2 + 1], screen, right_x, yy, col_w, text_h, (_byte_)cfg.ranged_panel_text_color, 0, 0);
         }
     }
 }
@@ -800,11 +894,7 @@ void __stdcall Hook_CombatResultDlg(HiHook* h, void* resultDlg, int a1, int a2, 
         s_ranged_panel_suppressed_for_result = true;
         s_ranged_panel_active = false;
         if (s_ranged_panel_bg) { s_ranged_panel_bg->DerefOrDestruct(); s_ranged_panel_bg = nullptr; }
-        _Pcx16_* scr0 = o_WndMgr ? o_WndMgr->screen_pcx16 : nullptr;
-        if (scr0) {
-            FillScreenRect16(scr0, s_ranged_panel_last_x, s_ranged_panel_last_y, s_ranged_panel_last_w, s_ranged_panel_last_h, 0);
-            o_WndMgr->RedrawScreenRect(s_ranged_panel_last_x, s_ranged_panel_last_y, s_ranged_panel_last_w, s_ranged_panel_last_h);
-        }
+        DrawBlackPanelRect();
     }
     CALL_7(void, __thiscall, h->GetDefaultFunc(), resultDlg, a1, a2, a3, a4, a5, a6);
 }
@@ -818,13 +908,7 @@ void __stdcall Hook_CombatResultRun(HiHook* h, void* resultDlg)
     s_ranged_panel_suppressed_for_result = true;
     s_ranged_panel_active = false;
     {
-        _Pcx16_* scr = o_WndMgr ? o_WndMgr->screen_pcx16 : nullptr;
-        if (scr && s_ranged_panel_last_w > 0 && s_ranged_panel_last_h > 0) {
-            FillScreenRect16(scr, s_ranged_panel_last_x, s_ranged_panel_last_y, s_ranged_panel_last_w, s_ranged_panel_last_h, 0);
-            o_WndMgr->RedrawScreenRect(s_ranged_panel_last_x, s_ranged_panel_last_y, s_ranged_panel_last_w, s_ranged_panel_last_h);
-            WriteLog("[Diag] FillRect black (%d,%d,%d,%d) before CPResult run",
-                s_ranged_panel_last_x, s_ranged_panel_last_y, s_ranged_panel_last_w, s_ranged_panel_last_h);
-        }
+        DrawBlackPanelRect();
     }
     CALL_1(void, __thiscall, h->GetDefaultFunc(), resultDlg);
 }
