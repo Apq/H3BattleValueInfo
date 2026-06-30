@@ -150,7 +150,7 @@ static void ReadConfig()
     if (cfg.ranged_panel_text_color > 255) cfg.ranged_panel_text_color = 255;
     cfg.ranged_panel_width      = GetPrivateProfileIntA("RangedPanel", "Width", 298, f);
     cfg.ranged_panel_height     = GetPrivateProfileIntA("RangedPanel", "Height", 93, f);
-    cfg.ranged_panel_y          = GetPrivateProfileIntA("RangedPanel", "Y", 8, f);
+    cfg.ranged_panel_y          = GetPrivateProfileIntA("RangedPanel", "Y", 0, f);
     cfg.row_y[0] = GetPrivateProfileIntA("RangedPanel", "Row1Y", 24, f);
     cfg.row_y[1] = GetPrivateProfileIntA("RangedPanel", "Row2Y", 42, f);
     cfg.row_y[2] = GetPrivateProfileIntA("RangedPanel", "Row3Y", 60, f);

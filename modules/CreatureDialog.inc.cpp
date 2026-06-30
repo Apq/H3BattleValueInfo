@@ -461,6 +461,7 @@ static _Pcx8_* LoadPanelImageAsPcx8()
 }
 
 static _Pcx8_* s_ranged_panel_bg = nullptr;
+static _Dlg_* s_last_battle_dlg = nullptr;
 
 static _Fnt_* GetRangedPanelTextFont()
 {
@@ -474,20 +475,35 @@ static _Fnt_* GetRangedPanelTextFont()
     return o_Smalfont_Fnt;
 }
 
+static bool s_battle_area_logged = false;
+
 static void DrawRangedPanelToScreen(_BattleMgr_* mgr)
 {
     if (!mgr || !mgr->dlg) return;
+    if (o_CurrentDlg && o_CurrentDlg != mgr->dlg) return;
     _Pcx16_* screen = o_WndMgr ? o_WndMgr->screen_pcx16 : nullptr;
     if (!screen) return;
 
     _Dlg_* dlg = mgr->dlg;
+
+    if (!s_battle_area_logged) {
+        s_battle_area_logged = true;
+        WriteLog("[RangedPanel] screen=%dx%d dlg=(%d,%d,%d,%d)",
+            screen->width, screen->height,
+            dlg->x, dlg->y, dlg->width, dlg->height);
+    }
+
     int panel_w = cfg.ranged_panel_width;
     int panel_h = cfg.ranged_panel_height;
     int text_h = 17;
 
-    int x = (screen->width - panel_w) / 2;
+    // 水平居中于战场对话框
+    int x = dlg->x + (dlg->width - panel_w) / 2;
     if (x < 0) x = 0;
-    int y = cfg.ranged_panel_y;
+
+    // 垂直：吸附到战场对话框外侧上方，Y 表示离上边缘的外侧间距
+    int y = dlg->y - panel_h - cfg.ranged_panel_y;
+    if (y < 0) y = 0;
 
     // 文字区域按面板自动分两列。
     int pad_x = 16;
@@ -497,6 +513,11 @@ static void DrawRangedPanelToScreen(_BattleMgr_* mgr)
     int left_x = x + pad_x;
     int right_x = x + panel_w - pad_x - col_w;
 
+    // 新战斗（dlg 变化）时重新加载背景
+    if (s_last_battle_dlg != dlg) {
+        s_last_battle_dlg = dlg;
+        if (s_ranged_panel_bg) { s_ranged_panel_bg->DerefOrDestruct(); s_ranged_panel_bg = nullptr; }
+    }
     if (!s_ranged_panel_bg) s_ranged_panel_bg = LoadPanelImageAsPcx8();
     if (s_ranged_panel_bg) {
         int bw = s_ranged_panel_bg->width;
