@@ -77,13 +77,16 @@ static int GetCreatureFightValueById(int creature_id)
     return *(int*)(table + creature_id * 0x74 + 0x3C);
 }
 
-// 在名称下方新增一行战斗价值；已有 id=3008/3009 时跳过，避免 BUILD/DefProc 重复插入。
+// 在名称行 Y 坐标基础上按配置下移后新增战斗价值；已有 id=3008/3009 时跳过，避免 BUILD/DefProc 重复插入。
 static void AddFightValueLine(_Dlg_* dlg, int fight_value, int count, int count_at_start)
 {
-    if (!cfg.enabled || !cfg.show_fight_value || !dlg || fight_value <= 0 || count <= 0) return;
+    if (!cfg.show_fight_value || !dlg || fight_value <= 0 || count <= 0) return;
     if (FindDlgItem(dlg, 3008) || FindDlgItem(dlg, 3009)) return;
 
-    _DlgStaticText_* label = _DlgStaticText_::Create(25, 41, 130, 17,
+    char* name_item = FindDlgItem(dlg, 203);
+    short y = (short)((name_item ? *(short*)(name_item + 0x1A) : 41) + cfg.fight_value_y_offset);
+
+    _DlgStaticText_* label = _DlgStaticText_::Create(25, y, 130, 17,
         cfg.label_fight_value, "smalfont.fnt", 4, 3009, 0 /*HLEFT*/, 0);
     if (label) dlg->AddItemToOwnArrayList(label);
 
@@ -94,12 +97,18 @@ static void AddFightValueLine(_Dlg_* dlg, int fight_value, int count, int count_
         _snprintf(buf, sizeof(buf) - 1, "%d", fight_value * count);
     buf[sizeof(buf) - 1] = 0;
 
-    _DlgStaticText_* value = _DlgStaticText_::Create(148, 41, 128, 17, buf, "smalfont.fnt", 4, 3008, 2 /*HRIGHT*/, 0);
+    _DlgStaticText_* value = _DlgStaticText_::Create(148, y, 128, 17, buf, "smalfont.fnt", 4, 3008, 2 /*HRIGHT*/, 0);
     if (value) dlg->AddItemToOwnArrayList(value);
+}
+
+static bool IsMegaDescLoaded()
+{
+    return _P && _P->GetInstance((char*)"HD.Plugin.MegaDesc") != nullptr;
 }
 
 static void TryAddFightValueLine(_Dlg_* dlg)
 {
+    if (!IsMegaDescLoaded()) return;
     if (!dlg || dlg->width != 298 || !FindDlgItem(dlg, 200)) return;
 
     int creature_id = *(int*)((char*)dlg + 0x60);
@@ -150,7 +159,7 @@ int __stdcall Hook_ShowStatsEntry(HiHook* h, _BattleMgr_* mgr, _BattleStack_* st
 
 int __stdcall Hook_RangedPower(HiHook* h, _BattleMgr_* mgr, _EventMsg_* msg)
 {
-    if (!cfg.enabled || !cfg.show_ranged_power
+    if (!cfg.show_ranged_power
         || !msg || msg->type != MT_MOUSEBUTTON || msg->subtype != MST_RBUTTONDOWN)
         return CALL_2(int, __thiscall, h->GetDefaultFunc(), mgr, msg);
 

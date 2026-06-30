@@ -79,14 +79,6 @@
     <None Include="deploy.bat" />
     <None Include="deploy.ps1" />
   </ItemGroup>
-  <ItemGroup>
-    <ProjectReference Include="..\H3MegaDesc\MegaDesc.vcxproj">
-      <Project>{378e086a-f308-43cd-9d88-660f0a452b81}</Project>
-      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
-      <LinkLibraryDependencies>false</LinkLibraryDependencies>
-      <UseLibraryDependencyInputs>false</UseLibraryDependencyInputs>
-    </ProjectReference>
-  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />
 </Project>

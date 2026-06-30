@@ -1,13 +1,13 @@
 // ========== 配置 ==========
 
 static struct Config {
-    bool  enabled;
     bool  show_fight_value;
     bool  show_remaining_pct;
     bool  show_ranged_power;
     char  label_fight_value[64];
     char  label_ours[64];
     char  label_enemy[64];
+    int   fight_value_y_offset;
 } cfg;
 
 static char g_ini_path[MAX_PATH];
@@ -140,11 +140,11 @@ static void DoLogCleanupOnce()
 static void ReadConfig()
 {
     const char* f = g_ini_path;
-    cfg.enabled            = GetPrivateProfileIntA("General",      "Enabled",              1, f) != 0;
     cfg.show_fight_value   = GetPrivateProfileIntA("CreatureInfo", "ShowFightValue",       1, f) != 0;
     cfg.show_remaining_pct = GetPrivateProfileIntA("CreatureInfo", "ShowRemainingPercent", 0, f) != 0;
     cfg.show_ranged_power  = GetPrivateProfileIntA("RangedPower",  "ShowRangedPower",      1, f) != 0;
     GetPrivateProfileStringA("Format", "LabelFightValue", "Fight Value", cfg.label_fight_value, sizeof(cfg.label_fight_value), f);
     GetPrivateProfileStringA("Format", "LabelOurSide",   "Ours",  cfg.label_ours,  sizeof(cfg.label_ours),  f);
     GetPrivateProfileStringA("Format", "LabelEnemySide", "Enemy", cfg.label_enemy, sizeof(cfg.label_enemy), f);
+    cfg.fight_value_y_offset = GetPrivateProfileIntA("Layout", "FightValueYOffset", 8, f);
 }
