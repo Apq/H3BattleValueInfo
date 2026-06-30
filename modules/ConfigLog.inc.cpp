@@ -2,7 +2,6 @@
 
 static struct Config {
     bool  show_fight_value;
-    bool  show_remaining_pct;
     bool  show_ranged_power;
     char  label_fight_value[64];
     char  label_ours[64];
@@ -141,7 +140,6 @@ static void ReadConfig()
 {
     const char* f = g_ini_path;
     cfg.show_fight_value   = GetPrivateProfileIntA("CreatureInfo", "ShowFightValue",       1, f) != 0;
-    cfg.show_remaining_pct = GetPrivateProfileIntA("CreatureInfo", "ShowRemainingPercent", 0, f) != 0;
     cfg.show_ranged_power  = GetPrivateProfileIntA("RangedPower",  "ShowRangedPower",      1, f) != 0;
     GetPrivateProfileStringA("Format", "LabelFightValue", "Fight Value", cfg.label_fight_value, sizeof(cfg.label_fight_value), f);
     GetPrivateProfileStringA("Format", "LabelOurSide",   "Ours",  cfg.label_ours,  sizeof(cfg.label_ours),  f);

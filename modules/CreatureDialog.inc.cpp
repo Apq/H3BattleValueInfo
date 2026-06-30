@@ -55,19 +55,6 @@ static void WriteLog(const char* fmt, ...)
     AppendUtf8LogLine(line);
 }
 
-// 从文本控件字符串中读取首个正整数；数量文本(id=204)通常是纯数字。
-static int ParseFirstPositiveInt(const char* s)
-{
-    if (!s) return 0;
-    while (*s && (*s < '0' || *s > '9')) s++;
-    int v = 0;
-    while (*s >= '0' && *s <= '9') {
-        v = v * 10 + (*s - '0');
-        s++;
-    }
-    return v;
-}
-
 // 根据生物 id 查询单只 fight_value；全局生物表 [0x6747B0]，结构大小 0x74，fight_value 偏移 +0x3C。
 static int GetCreatureFightValueById(int creature_id)
 {
@@ -77,10 +64,10 @@ static int GetCreatureFightValueById(int creature_id)
     return *(int*)(table + creature_id * 0x74 + 0x3C);
 }
 
-// 在名称行 Y 坐标基础上按配置下移后新增战斗价值；已有 id=3008/3009 时跳过，避免 BUILD/DefProc 重复插入。
-static void AddFightValueLine(_Dlg_* dlg, int fight_value, int count, int count_at_start)
+// 在名称行 Y 坐标基础上按配置下移后新增生物配置值；已有 id=3008/3009 时跳过，避免 BUILD/DefProc 重复插入。
+static void AddFightValueLine(_Dlg_* dlg, int fight_value)
 {
-    if (!cfg.show_fight_value || !dlg || fight_value <= 0 || count <= 0) return;
+    if (!cfg.show_fight_value || !dlg || fight_value <= 0) return;
     if (FindDlgItem(dlg, 3008) || FindDlgItem(dlg, 3009)) return;
 
     char* name_item = FindDlgItem(dlg, 203);
@@ -91,10 +78,7 @@ static void AddFightValueLine(_Dlg_* dlg, int fight_value, int count, int count_
     if (label) dlg->AddItemToOwnArrayList(label);
 
     static char buf[32];
-    if (cfg.show_remaining_pct && count_at_start > 0)
-        _snprintf(buf, sizeof(buf) - 1, "%d(%d%%)", fight_value * count, count * 100 / count_at_start);
-    else
-        _snprintf(buf, sizeof(buf) - 1, "%d", fight_value * count);
+    _snprintf(buf, sizeof(buf) - 1, "%d", fight_value);
     buf[sizeof(buf) - 1] = 0;
 
     _DlgStaticText_* value = _DlgStaticText_::Create(148, y, 128, 17, buf, "smalfont.fnt", 4, 3008, 2 /*HRIGHT*/, 0);
@@ -112,12 +96,9 @@ static void TryAddFightValueLine(_Dlg_* dlg)
     if (!dlg || dlg->width != 298 || !FindDlgItem(dlg, 200)) return;
 
     int creature_id = *(int*)((char*)dlg + 0x60);
-    char* count_item = FindDlgItem(dlg, 204);
-    const char* count_text = count_item ? *(_char_**)(count_item + 0x34) : nullptr;
-    int count = ParseFirstPositiveInt(count_text);
     int single_fv = GetCreatureFightValueById(creature_id);
 
-    AddFightValueLine(dlg, single_fv, count, count);
+    AddFightValueLine(dlg, single_fv);
 }
 
 // BUILD 阶段 hook：窗口构建完成后插入战斗价值行。
