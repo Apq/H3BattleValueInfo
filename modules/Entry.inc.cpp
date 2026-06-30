@@ -10,8 +10,13 @@ static void StartPlugin()
 
     // 战场顶部常驻远程力量面板。
     _PI->WriteHiHook(0x493FC0, SPLICE_, EXTENDED_, THISCALL_, Hook_BattleRedraw);
+    // 战斗结果界面（CPResult.pcx）运行/关闭时控制远程面板生命周期。
+    _PI->WriteHiHook(0x46FE20, SPLICE_, EXTENDED_, THISCALL_, Hook_CombatResultDlg);
+    _PI->WriteHiHook(0x4716C0, SPLICE_, EXTENDED_, THISCALL_, Hook_CombatResultRun);
+    _PI->WriteHiHook(0x4715C0, SPLICE_, EXTENDED_, THISCALL_, Hook_CombatResultDestroy);
+    _PI->WriteHiHook(0x602AE0, SPLICE_, EXTENDED_, THISCALL_, Hook_WndMgrRunDlg);
 
-    WriteLog("BattleValueInfo 已启用。Hook：FightValue(4), RangedPanel(1)。");
+    WriteLog("BattleValueInfo 已启用。Hook：FightValue(4), RangedPanel(5, diagnostic)。");
 }
 
 // ========== DllMain ==========
