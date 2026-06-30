@@ -8,11 +8,10 @@ static void StartPlugin()
     _PI->WriteLoHook(0x5F491E, Hook_BuildTown);
     _PI->WriteHiHook(0x41B120, SPLICE_, EXTENDED_, THISCALL_, Hook_DlgDefProc);
 
-    // 右键空格子显示远程力量。
-    _PI->WriteHiHook(0x468440, SPLICE_, EXTENDED_, THISCALL_, Hook_ShowStatsEntry);
-    _PI->WriteHiHook(0x4746B0, SPLICE_, EXTENDED_, THISCALL_, Hook_RangedPower);
+    // 战场顶部常驻远程力量面板。
+    _PI->WriteHiHook(0x493FC0, SPLICE_, EXTENDED_, THISCALL_, Hook_BattleRedraw);
 
-    WriteLog("BattleValueInfo 已启用。Hook：FightValue(4), RangedPower(2)。");
+    WriteLog("BattleValueInfo 已启用。Hook：FightValue(4), RangedPanel(1)。");
 }
 
 // ========== DllMain ==========

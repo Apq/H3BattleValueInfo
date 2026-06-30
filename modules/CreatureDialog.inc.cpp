@@ -99,7 +99,7 @@ static int GetCurrentStackFightValueEstimate(int creature_id, int count, int fig
 // 在名称行 Y 坐标基础上按配置下移后新增生物配置值；已有 id=3008/3009 时跳过，避免 BUILD/DefProc 重复插入。
 static void AddFightValueLine(_Dlg_* dlg, int fight_value, int current_value)
 {
-    if (!cfg.show_fight_value || !dlg || fight_value <= 0) return;
+    if (!dlg || fight_value <= 0) return;
     if (FindDlgItem(dlg, 3008) || FindDlgItem(dlg, 3009)) return;
 
     char* name_item = FindDlgItem(dlg, 203);
@@ -167,47 +167,377 @@ int __stdcall Hook_DlgDefProc(HiHook* h, _Dlg_* dlg, _EventMsg_* msg)
     return CALL_2(int, __thiscall, h->GetDefaultFunc(), dlg, msg);
 }
 
-// ========== 右键空格子 → 双方远程力量对比 ==========
+// ========== 战场顶部远程力量面板 ==========
 
-static bool g_stats_shown = false;
-
-int __stdcall Hook_ShowStatsEntry(HiHook* h, _BattleMgr_* mgr, _BattleStack_* stack, int right_click)
+static int CalcRangedUnitsPower(_BattleMgr_* mgr, int side)
 {
-    g_stats_shown = true;
-    return CALL_3(int, __thiscall, h->GetDefaultFunc(), mgr, stack, right_click);
+    if (!mgr || side < 0 || side > 1) return 0;
+    int power = 0;
+    for (int slot = 0; slot < 21; slot++) {
+        const _BattleStack_& s = mgr->stack[side][slot];
+        if (s.count_current > 0 && s.creature.shots > 0)
+            power += s.creature.fight_value * s.count_current;
+    }
+    return power;
 }
 
-int __stdcall Hook_RangedPower(HiHook* h, _BattleMgr_* mgr, _EventMsg_* msg)
+static int CalcHeroSpellPower(_BattleMgr_* mgr, int side)
 {
-    if (!cfg.show_ranged_power
-        || !msg || msg->type != MT_MOUSEBUTTON || msg->subtype != MST_RBUTTONDOWN)
-        return CALL_2(int, __thiscall, h->GetDefaultFunc(), mgr, msg);
+    // TODO: 攻击魔法对应的远程力量公式待定；先保留面板行位。
+    return 0;
+}
 
-    g_stats_shown = false;
-    int ret = CALL_2(int, __thiscall, h->GetDefaultFunc(), mgr, msg);
+static bool ReadWholeFile(const char* path, unsigned char** outData, int* outSize)
+{
+    *outData = nullptr;
+    *outSize = 0;
+    HANDLE h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    DWORD size = GetFileSize(h, nullptr);
+    if (size == INVALID_FILE_SIZE || size == 0 || size > 32 * 1024 * 1024) { CloseHandle(h); return false; }
+    unsigned char* data = (unsigned char*)malloc(size);
+    if (!data) { CloseHandle(h); return false; }
+    DWORD read = 0;
+    bool ok = ReadFile(h, data, size, &read, nullptr) && read == size;
+    CloseHandle(h);
+    if (!ok) { free(data); return false; }
+    *outData = data;
+    *outSize = (int)size;
+    return true;
+}
 
-    if (!g_stats_shown) {
-        int power[2] = {0, 0};
-        for (int side = 0; side < 2; side++) {
-            for (int slot = 0; slot < 21; slot++) {
-                const _BattleStack_& s = mgr->stack[side][slot];
-                if (s.count_current > 0 && s.creature.shots > 0)
-                    power[side] += s.creature.fight_value * s.count_current;
+// ---- 8-bit PCX → _Pcx8_（保留索引+调色板，颜色精准）----
+static _Pcx8_* DecodePcx8File(const char* path)
+{
+    unsigned char* data = nullptr;
+    int size = 0;
+    if (!ReadWholeFile(path, &data, &size)) return nullptr;
+    if (size < 128) { free(data); return nullptr; }
+
+    int bpp     = data[3];
+    int xmin    = *(short*)(data + 4);
+    int ymin    = *(short*)(data + 6);
+    int xmax    = *(short*)(data + 8);
+    int ymax    = *(short*)(data + 10);
+    int nplanes = data[65];
+    int bpl     = *(short*)(data + 66);
+    int w = xmax - xmin + 1;
+    int h = ymax - ymin + 1;
+
+    if (w <= 0 || h <= 0 || w > 4096 || h > 4096) { free(data); return nullptr; }
+    if (!(nplanes == 1 && bpp == 8)) { free(data); return nullptr; }  // 只处理 8-bit
+
+    int rawSize = bpl * h;
+    unsigned char* raw = (unsigned char*)malloc(rawSize);
+    if (!raw) { free(data); return nullptr; }
+
+    int pos = 128, rp = 0;
+    while (rp < rawSize && pos < size) {
+        unsigned char b = data[pos++];
+        if ((b & 0xC0) == 0xC0) {
+            int cnt = b & 0x3F;
+            if (pos >= size) break;
+            unsigned char val = data[pos++];
+            for (int i = 0; i < cnt && rp < rawSize; ++i) raw[rp++] = val;
+        } else {
+            raw[rp++] = b;
+        }
+    }
+
+    // 调色板
+    unsigned char pal[768] = {0};
+    bool palFound = false;
+    if (size >= 769 && data[size - 769] == 0x0C) {
+        memcpy(pal, data + (size - 768), 768);
+        palFound = true;
+    }
+    if (!palFound) {
+        for (int i = size - 769; i >= 0; --i) {
+            if (data[i] == 0x0C && i + 768 < size) {
+                memcpy(pal, data + i + 1, 768);
+                palFound = true;
+                break;
             }
         }
-
-        static char popup[256];
-        int total = power[0] + power[1];
-        if (total > 0)
-            _snprintf(popup, sizeof(popup) - 1, "%s: %d (%d%%)\n%s: %d (%d%%)",
-                cfg.label_ours,  power[0], power[0] * 100 / total,
-                cfg.label_enemy, power[1], power[1] * 100 / total);
-        else
-            _snprintf(popup, sizeof(popup) - 1, "%s: 0\n%s: 0", cfg.label_ours, cfg.label_enemy);
-        popup[sizeof(popup) - 1] = 0;
-
-        CALL_12(void, __fastcall, 0x4F6C00, popup, 1, -1, -1, -1, 0, -1, 0, -1, 0, -1, 0);
-        WriteLog("远程力量对比 我方=%d 敌方=%d", power[0], power[1]);
     }
-    return ret;
+
+    _Pcx8_* pcx8 = _Pcx8_::CreateNew((char*)"bv_panel", w, h);
+    if (!pcx8) { free(raw); free(data); return nullptr; }
+
+    for (int y = 0; y < h; y++)
+        memcpy((unsigned char*)pcx8->buffer + y * pcx8->scanline_size, raw + y * bpl, w);
+
+    // 设置 palette24
+    for (int i = 0; i < 256; i++) {
+        pcx8->palette24.colors[i].r = pal[i * 3];
+        pcx8->palette24.colors[i].g = pal[i * 3 + 1];
+        pcx8->palette24.colors[i].b = pal[i * 3 + 2];
+    }
+    // 设置 palette16 (RGB565)
+    for (int i = 0; i < 256; i++)
+        pcx8->palette16.colors[i] = RGB565_fromR8G8B8(pal[i * 3], pal[i * 3 + 1], pal[i * 3 + 2]);
+
+    pcx8->ref_count = 0x10000;
+    free(raw);
+    free(data);
+    return pcx8;
+}
+
+// ---- 24-bit PCX / PNG / JPG / BMP → 量化到游戏调色板 → _Pcx8_ ----
+static unsigned char* DecodePcxFile(const char* path, int* outW, int* outH)
+{
+    unsigned char* data = nullptr;
+    int size = 0;
+    if (!ReadWholeFile(path, &data, &size)) return nullptr;
+    if (size < 128) { free(data); return nullptr; }
+
+    int bpp      = data[3];
+    int xmin     = *(short*)(data + 4);
+    int ymin     = *(short*)(data + 6);
+    int xmax     = *(short*)(data + 8);
+    int ymax     = *(short*)(data + 10);
+    int nplanes  = data[65];
+    int bpl      = *(short*)(data + 66);
+    int w = xmax - xmin + 1;
+    int h = ymax - ymin + 1;
+
+    if (w <= 0 || h <= 0 || w > 4096 || h > 4096) { free(data); return nullptr; }
+
+    int rawSize = bpl * nplanes * h;
+    unsigned char* raw = (unsigned char*)malloc(rawSize);
+    if (!raw) { free(data); return nullptr; }
+
+    int pos = 128, rp = 0;
+    while (rp < rawSize && pos < size) {
+        unsigned char b = data[pos++];
+        if ((b & 0xC0) == 0xC0) {
+            int cnt = b & 0x3F;
+            if (pos >= size) break;
+            unsigned char val = data[pos++];
+            for (int i = 0; i < cnt && rp < rawSize; ++i) raw[rp++] = val;
+        } else {
+            raw[rp++] = b;
+        }
+    }
+
+    unsigned char* rgb = (unsigned char*)malloc(w * h * 3);
+    if (!rgb) { free(raw); free(data); return nullptr; }
+
+    if (nplanes == 3 && bpp == 8) {
+        for (int y = 0; y < h; y++) {
+            int base = y * bpl * nplanes;
+            for (int x = 0; x < w; x++) {
+                rgb[(y * w + x) * 3]     = raw[base + x];
+                rgb[(y * w + x) * 3 + 1] = raw[base + bpl + x];
+                rgb[(y * w + x) * 3 + 2] = raw[base + 2 * bpl + x];
+            }
+        }
+    } else if (nplanes == 1 && bpp == 8) {
+        unsigned char pal[768] = {0};
+        bool palFound = false;
+        if (size >= 769 && data[size - 769] == 0x0C) {
+            memcpy(pal, data + (size - 768), 768);
+            palFound = true;
+        }
+        if (!palFound) {
+            for (int i = size - 769; i >= 0; --i) {
+                if (data[i] == 0x0C && i + 768 < size) {
+                    memcpy(pal, data + i + 1, 768);
+                    palFound = true;
+                    break;
+                }
+            }
+        }
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                unsigned char idx = raw[y * bpl + x];
+                rgb[(y * w + x) * 3]     = pal[idx * 3];
+                rgb[(y * w + x) * 3 + 1] = pal[idx * 3 + 1];
+                rgb[(y * w + x) * 3 + 2] = pal[idx * 3 + 2];
+            }
+        }
+    } else {
+        free(raw); free(data); free(rgb);
+        return nullptr;
+    }
+
+    free(raw);
+    free(data);
+    *outW = w;
+    *outH = h;
+    return rgb;
+}
+
+// ---- 统一图片加载：按扩展名自适应 ----
+// .pcx → PCX 解码器；.png/.jpg/.bmp/… → stb_image
+// 输出 RGB888（3 bytes/pixel），调用方 free()。
+static unsigned char* DecodeImageFile(const char* path, const char* filename, int* outW, int* outH)
+{
+    const char* ext = strrchr(filename, '.');
+    bool isPcx = ext && _stricmp(ext, ".pcx") == 0;
+
+    if (isPcx)
+        return DecodePcxFile(path, outW, outH);
+
+    // stb_image 路径
+    unsigned char* fileData = nullptr;
+    int fileSize = 0;
+    if (!ReadWholeFile(path, &fileData, &fileSize)) return nullptr;
+
+    int w = 0, h = 0, comp = 0;
+    unsigned char* rgba = stbi_load_from_memory(fileData, fileSize, &w, &h, &comp, 4);
+    free(fileData);
+    if (!rgba) return nullptr;
+
+    unsigned char* rgb = (unsigned char*)malloc(w * h * 3);
+    if (!rgb) { stbi_image_free(rgba); return nullptr; }
+    for (int i = 0; i < w * h; ++i) {
+        rgb[i * 3]     = rgba[i * 4];
+        rgb[i * 3 + 1] = rgba[i * 4 + 1];
+        rgb[i * 3 + 2] = rgba[i * 4 + 2];
+    }
+    stbi_image_free(rgba);
+    *outW = w;
+    *outH = h;
+    return rgb;
+}
+
+static _Pcx8_* QuantizeRgbAsPcx8(unsigned char* rgb, int w, int h, _Pcx8_* palSrc, const char* resName)
+{
+    if (!rgb || !palSrc || w <= 0 || h <= 0) return nullptr;
+    _Pcx8_* pcx8 = _Pcx8_::CreateNew((char*)resName, w, h);
+    if (!pcx8) return nullptr;
+    pcx8->SetPaletteFrom(palSrc);
+
+    unsigned char* dst = (unsigned char*)pcx8->buffer;
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            unsigned char* p = rgb + (y * w + x) * 3;
+            int best = 0;
+            int bestD = 0x7FFFFFFF;
+            for (int i = 1; i < 256; i++) {
+                int dr = (int)p[0] - (int)palSrc->palette24.colors[i].r;
+                int dg = (int)p[1] - (int)palSrc->palette24.colors[i].g;
+                int db = (int)p[2] - (int)palSrc->palette24.colors[i].b;
+                int d = dr * dr + dg * dg + db * db;
+                if (d < bestD) { bestD = d; best = i; if (d == 0) break; }
+            }
+            dst[y * pcx8->scanline_size + x] = (unsigned char)best;
+        }
+    }
+    pcx8->ref_count = 0x10000;
+    return pcx8;
+}
+
+static _Pcx8_* LoadPanelImageAsPcx8()
+{
+    if (!cfg.ranged_panel_image[0]) return nullptr;
+
+    char modulePath[MAX_PATH];
+    GetModuleFileNameA(g_hModule, modulePath, MAX_PATH);
+    char* slash = strrchr(modulePath, '\\');
+    if (slash) slash[1] = 0; else modulePath[0] = 0;
+
+    char path[2048];
+    _snprintf(path, sizeof(path) - 1, "%simg\\%s", modulePath, cfg.ranged_panel_image);
+    path[sizeof(path) - 1] = 0;
+
+    const char* ext = strrchr(cfg.ranged_panel_image, '.');
+    bool isPcx = ext && _stricmp(ext, ".pcx") == 0;
+    if (isPcx) {
+        _Pcx8_* indexed = DecodePcx8File(path);
+        if (indexed) return indexed;
+    }
+
+    int w = 0, h = 0;
+    unsigned char* rgb = DecodeImageFile(path, cfg.ranged_panel_image, &w, &h);
+    if (!rgb) return nullptr;
+
+    _Pcx8_* palSrc = o_LoadPcx8((char*)"DlgBluBk.PCX");
+    _Pcx8_* pcx8 = palSrc ? QuantizeRgbAsPcx8(rgb, w, h, palSrc, "bv_panel") : nullptr;
+    if (palSrc) palSrc->DerefOrDestruct();
+    free(rgb);
+    return pcx8;
+}
+
+static _Pcx8_* s_ranged_panel_bg = nullptr;
+
+static _Fnt_* GetRangedPanelTextFont()
+{
+    const char* name = cfg.ranged_panel_text_font;
+    if (!name || !name[0]) return o_Smalfont_Fnt;
+    if (_stricmp(name, "tiny.fnt") == 0 || _stricmp(name, "tiny") == 0) return o_Tiny_Fnt;
+    if (_stricmp(name, "smalfont.fnt") == 0 || _stricmp(name, "smalfont") == 0) return o_Smalfont_Fnt;
+    if (_stricmp(name, "medfont.fnt") == 0 || _stricmp(name, "medfont") == 0) return o_Medfont_Fnt;
+    if (_stricmp(name, "bigfont.fnt") == 0 || _stricmp(name, "bigfont") == 0) return o_Bigfont_Fnt;
+    if (_stricmp(name, "calli10r.fnt") == 0 || _stricmp(name, "calli10r") == 0) return o_Calli10R_Fnt;
+    return o_Smalfont_Fnt;
+}
+
+static void DrawRangedPanelToScreen(_BattleMgr_* mgr)
+{
+    if (!mgr || !mgr->dlg) return;
+    _Pcx16_* screen = o_WndMgr ? o_WndMgr->screen_pcx16 : nullptr;
+    if (!screen) return;
+
+    _Dlg_* dlg = mgr->dlg;
+    int panel_w = cfg.ranged_panel_width;
+    int panel_h = cfg.ranged_panel_height;
+    int text_h = 17;
+
+    int x = (screen->width - panel_w) / 2;
+    if (x < 0) x = 0;
+    int y = cfg.ranged_panel_y;
+
+    // 文字区域按面板自动分两列。
+    int pad_x = 16;
+    int mid_gap = 16;
+    int col_w = (panel_w - pad_x * 2 - mid_gap) / 2;
+    if (col_w < 40) col_w = panel_w / 2;
+    int left_x = x + pad_x;
+    int right_x = x + panel_w - pad_x - col_w;
+
+    if (!s_ranged_panel_bg) s_ranged_panel_bg = LoadPanelImageAsPcx8();
+    if (s_ranged_panel_bg) {
+        int bw = s_ranged_panel_bg->width;
+        int bh = s_ranged_panel_bg->height;
+        int draw_w = (bw < panel_w) ? bw : panel_w;
+        int draw_h = (bh < panel_h) ? bh : panel_h;
+        s_ranged_panel_bg->DrawToPcx16(0, 0, draw_w, draw_h, screen, x, y, FALSE);
+    }
+
+    int ranged[2] = { CalcRangedUnitsPower(mgr, 0), CalcRangedUnitsPower(mgr, 1) };
+    int spell[2] = { CalcHeroSpellPower(mgr, 0), CalcHeroSpellPower(mgr, 1) };
+    int total[2] = { ranged[0] + spell[0], ranged[1] + spell[1] };
+
+    static char text[6][64];
+    _snprintf(text[0], sizeof(text[0]) - 1, "%d", ranged[0]);
+    _snprintf(text[1], sizeof(text[1]) - 1, "%d", ranged[1]);
+    _snprintf(text[2], sizeof(text[2]) - 1, "%d", spell[0]);
+    _snprintf(text[3], sizeof(text[3]) - 1, "%d", spell[1]);
+    _snprintf(text[4], sizeof(text[4]) - 1, "%d", total[0]);
+    _snprintf(text[5], sizeof(text[5]) - 1, "%d", total[1]);
+    for (int i = 0; i < 6; ++i) text[i][sizeof(text[i]) - 1] = 0;
+
+    _Fnt_* font = GetRangedPanelTextFont();
+    if (font) {
+        for (int row = 0; row < 3; ++row) {
+            int yy = y + cfg.row_y[row];
+            font->DrawTextToPcx16(text[row * 2], screen, left_x, yy, col_w, text_h, (_byte_)cfg.ranged_panel_text_color, 2, 0);
+            font->DrawTextToPcx16(text[row * 2 + 1], screen, right_x, yy, col_w, text_h, (_byte_)cfg.ranged_panel_text_color, 0, 0);
+        }
+    }
+}
+
+static void UpdateRangedPanel(_BattleMgr_* mgr)
+{
+    DrawRangedPanelToScreen(mgr);
+}
+
+
+int __stdcall Hook_BattleRedraw(HiHook* h, _BattleMgr_* mgr, _bool8_ flip, _bool8_ set_battle_redraws, _bool8_ use_battle_redraws, int waiting_time, _bool8_ redraw_background, _bool8_ wait)
+{
+    CALL_7(void, __thiscall, h->GetDefaultFunc(), mgr, flip, set_battle_redraws, use_battle_redraws, waiting_time, redraw_background, wait);
+    UpdateRangedPanel(mgr);
+    return 0;
 }

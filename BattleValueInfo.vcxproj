@@ -66,6 +66,7 @@
     <ClInclude Include="deps\patcher_x86.hpp" />
     <ClInclude Include="deps\HoMM3_Base.h" />
     <ClInclude Include="deps\HoMM3_GUI.h" />
+    <ClInclude Include="deps\stb_image.h" />
     <ClInclude Include="resource.h" />
   </ItemGroup>
   <ItemGroup>

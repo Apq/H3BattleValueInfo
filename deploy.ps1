@@ -9,5 +9,14 @@ if (-not (Test-Path $packsDst)) {
 Copy-Item "$src\BattleValueInfo.dll" $packsDst -Force
 Copy-Item "$PSScriptRoot\BattleValueInfo.ini" $packsDst -Force
 
+$imgSrc = "$PSScriptRoot\img"
+$imgDst = "$packsDst\img"
+if (Test-Path $imgSrc) {
+    New-Item -ItemType Directory -Path $imgDst -Force | Out-Null
+    Get-ChildItem "$imgSrc\*.*" -ErrorAction SilentlyContinue | ForEach-Object {
+        Copy-Item $_.FullName $imgDst -Force
+    }
+}
+
 Write-Host "已部署到 $packsDst"
 Write-Host "注意：BattleValueInfo 依赖 MegaDesc，请先部署并启用 MegaDesc。"

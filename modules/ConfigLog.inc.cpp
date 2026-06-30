@@ -1,11 +1,14 @@
 // ========== 配置 ==========
 
 static struct Config {
-    bool  show_fight_value;
-    bool  show_ranged_power;
     char  label_fight_value[64];
-    char  label_ours[64];
-    char  label_enemy[64];
+    char  ranged_panel_image[256];
+    char  ranged_panel_text_font[64];
+    int   ranged_panel_text_color;
+    int   ranged_panel_width;
+    int   ranged_panel_height;
+    int   ranged_panel_y;
+    int   row_y[3];
     int   fight_value_y_offset;
 } cfg;
 
@@ -139,10 +142,17 @@ static void DoLogCleanupOnce()
 static void ReadConfig()
 {
     const char* f = g_ini_path;
-    cfg.show_fight_value   = GetPrivateProfileIntA("CreatureInfo", "ShowFightValue",       1, f) != 0;
-    cfg.show_ranged_power  = GetPrivateProfileIntA("RangedPower",  "ShowRangedPower",      1, f) != 0;
     GetPrivateProfileStringA("Format", "LabelFightValue", "Fight Value", cfg.label_fight_value, sizeof(cfg.label_fight_value), f);
-    GetPrivateProfileStringA("Format", "LabelOurSide",   "Ours",  cfg.label_ours,  sizeof(cfg.label_ours),  f);
-    GetPrivateProfileStringA("Format", "LabelEnemySide", "Enemy", cfg.label_enemy, sizeof(cfg.label_enemy), f);
+    GetPrivateProfileStringA("RangedPanel", "BackgroundImage", "rp_bg.pcx", cfg.ranged_panel_image, sizeof(cfg.ranged_panel_image), f);
+    GetPrivateProfileStringA("RangedPanel", "TextFont", "smalfont.fnt", cfg.ranged_panel_text_font, sizeof(cfg.ranged_panel_text_font), f);
+    cfg.ranged_panel_text_color = GetPrivateProfileIntA("RangedPanel", "TextColor", 4, f);
+    if (cfg.ranged_panel_text_color < 0) cfg.ranged_panel_text_color = 0;
+    if (cfg.ranged_panel_text_color > 255) cfg.ranged_panel_text_color = 255;
+    cfg.ranged_panel_width      = GetPrivateProfileIntA("RangedPanel", "Width", 298, f);
+    cfg.ranged_panel_height     = GetPrivateProfileIntA("RangedPanel", "Height", 93, f);
+    cfg.ranged_panel_y          = GetPrivateProfileIntA("RangedPanel", "Y", 8, f);
+    cfg.row_y[0] = GetPrivateProfileIntA("RangedPanel", "Row1Y", 24, f);
+    cfg.row_y[1] = GetPrivateProfileIntA("RangedPanel", "Row2Y", 42, f);
+    cfg.row_y[2] = GetPrivateProfileIntA("RangedPanel", "Row3Y", 60, f);
     cfg.fight_value_y_offset = GetPrivateProfileIntA("Layout", "FightValueYOffset", 8, f);
 }
