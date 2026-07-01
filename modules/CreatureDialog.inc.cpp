@@ -300,7 +300,58 @@ static int CalcHeroSpellPower(_BattleMgr_* mgr, int side)
     };
 
     int best = 0;
-    int spell_power = hero->power;
+    // homm3.h 中 power 定义在 +1142(0x476)，但实际那是 attack。
+    // 原版代码中主属性在 0x476~0x479，顺序是 ATK/DEF/SPW/KNO。
+    // spell power 在 0x478 (1144 decimal)。
+    // 先用诊断方式确认：
+    unsigned char* raw = (unsigned char*)hero;
+    int sp_atk = raw[0x476];
+    int sp_def = raw[0x477];
+    int sp_spw = raw[0x478];
+    int sp_kno = raw[0x479];
+    WriteLog("[HeroStats] ATK=%d DEF=%d SPW=%d KNO=%d (hero->power field=%d)",
+        sp_atk, sp_def, sp_spw, sp_kno, hero->power);
+
+    // dump 副技能、宝物、法术（仅首次）
+    static bool s_hero_dumped = false;
+    if (!s_hero_dumped) {
+        s_hero_dumped = true;
+        static const char* hss_names[28] = {
+            "Pathfinding","Archery","Logistics","Scouting","Diplomacy","Navigation",
+            "Leadership","Wisdom","Mysticism","Luck","Ballistics","EagleEye",
+            "Necromancy","Estates","FireMagic","AirMagic","WaterMagic","EarthMagic",
+            "Scholar","Tactics","Artillery","Learning","Offence","Armorer",
+            "Intelligence","Sorcery","Resistance","FirstAid"
+        };
+        for (int i = 0; i < 28; i++) {
+            if (hero->second_skill[i] > 0)
+                WriteLog("[HeroSkill] %s(%d)=%d", hss_names[i], i, hero->second_skill[i]);
+        }
+        for (int i = 0; i < 19; i++) {
+            if (hero->doll_art[i].id != -1 && hero->doll_art[i].id != 0xFFFF)
+                WriteLog("[HeroArt] slot%d id=%d mod=%d", i, hero->doll_art[i].id, hero->doll_art[i].mod);
+        }
+        for (int s = 0; s < 70; s++) {
+            if (hero->spell[s]) {
+                _Spell_& sp2 = o_Spell[s];
+                WriteLog("[HeroSpell] id=%d level=%d eff_power=%d effect=[%d,%d,%d,%d] mana=[%d,%d,%d,%d]",
+                    s, sp2.level, sp2.eff_power,
+                    sp2.effect[0], sp2.effect[1], sp2.effect[2], sp2.effect[3],
+                    sp2.mana_cost[0], sp2.mana_cost[1], sp2.mana_cost[2], sp2.mana_cost[3]);
+            }
+        }
+    }
+
+    // dump 英雄特长
+    int hero_id = *(int*)((char*)hero + 0x1a);
+    int hero_level = *(short*)((char*)hero + 0x55);
+    _ptr_ spec_table = *(_ptr_*)0x679C80;
+    int spec_type = *(int*)(spec_table + hero_id * 0x28);
+    int spec_param = *(int*)(spec_table + hero_id * 0x28 + 4);
+    WriteLog("[HeroSpec] hero_id=%d level=%d spec_type=%d spec_param=%d",
+        hero_id, hero_level, spec_type, spec_param);
+
+    int spell_power = sp_spw;  // 使用正确的 spell power 偏移
     if (spell_power < 1) spell_power = 1;
 
     for (int i = 0; i < sizeof(kCountedDamageSpells) / sizeof(kCountedDamageSpells[0]); ++i) {
@@ -314,19 +365,43 @@ static int CalcHeroSpellPower(_BattleMgr_* mgr, int side)
         if (spell.level > max_spell_level) continue;
 
         int level = GetHeroEffectiveSpellLevel(hero, spell_id);
-        int damage = spell.effect[level] + spell.eff_power * spell_power;
+        int base_damage = spell.effect[level] + spell.eff_power * spell_power;
+        int damage = base_damage;
 
         // 法术特长：原版函数按英雄等级、特长法术、目标生物等级计算额外加成。
         // 当前“魔法输出能力”不考虑敌方目标，无目标估算参数固定用 1。
-        damage += hero->GetSpell_Specialisation_Bonuses(spell_id, 1, damage);
+        int spec_bonus = hero->GetSpell_Specialisation_Bonuses(spell_id, 1, damage);
+        damage += spec_bonus;
 
         // 魔力 Sorcery：Basic +5%，Advanced +10%，Expert +15%。
+        // 英雄特长(spec_type=0, spec_param=25=HSS_SORCERY)会随等级增强 sorcery。
+        // 公式（浮点）：effective_mult = 1 + sorcery_pct + sorcery_pct * (hero_level / 20.0)
         int sorcery = hero->second_skill[HSS_SORCERY];
-        if (sorcery == 1) damage = damage * 105 / 100;
-        else if (sorcery == 2) damage = damage * 110 / 100;
-        else if (sorcery >= 3) damage = damage * 115 / 100;
+        int pre_sorcery = damage;
 
+        bool has_sorcery_spec = (spec_type == 0 && spec_param == HSS_SORCERY);
+        if (sorcery > 0) {
+            double sorcery_pct;
+            if (sorcery == 1) sorcery_pct = 0.05;
+            else if (sorcery == 2) sorcery_pct = 0.10;
+            else sorcery_pct = 0.15;  // >=3 expert
+
+            if (has_sorcery_spec) {
+                // 魔力特长：sorcery 效果随英雄等级增强
+                sorcery_pct = sorcery_pct * (1.0 + (double)hero_level / 20.0);
+            }
+
+            damage = (int)((double)damage * (1.0 + sorcery_pct));
+        }
+
+        int pre_orb = damage;
         damage = ApplySpellDamageArtifactBonuses(hero, spell_id, damage);
+
+        WriteLog("[SpellCalc] spell=%d lv=%d sp=%d base=%d spec=%d sorcery=%d%s(%.4f)(%d->%d) orb=(%d->%d) final=%d",
+            spell_id, level, spell_power, base_damage, spec_bonus,
+            sorcery, has_sorcery_spec ? "+spec" : "",
+            has_sorcery_spec ? (sorcery > 0 ? (sorcery == 1 ? 0.05 : sorcery == 2 ? 0.10 : 0.15) * (1.0 + (double)hero_level / 20.0) : 0.0) : (sorcery > 0 ? (sorcery == 1 ? 0.05 : sorcery == 2 ? 0.10 : 0.15) : 0.0),
+            pre_sorcery, pre_orb, pre_orb, damage, damage);
 
         if (damage > best) best = damage;
     }
@@ -781,10 +856,9 @@ public:
         ResetRuntimeState();
     }
 
-    void MarkDirty(const char* reason)
+    void MarkDirty(const char* /*reason*/)
     {
         dirty_ = true;
-        if (reason) WriteLog("[RangedOverlayPanel] dirty: %s", reason);
     }
 
     void Destroy()
