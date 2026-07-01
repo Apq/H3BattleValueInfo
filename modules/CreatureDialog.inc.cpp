@@ -276,6 +276,18 @@ static int CalcHeroSpellPower(_BattleMgr_* mgr, int side)
     // 只要求英雄有魔法书；不检查当前魔法值，也不检查本回合是否已经施法。
     if (hero->doll_art[AS_SPELL_BOOK].id == -1) return 0;
 
+    // 禁魔地形检查：spec_terr_type == 2 为诅咒之地，双方只能施放 1 级魔法。
+    // spec_terr_type == 1 为魔法平原，法术以专家级施放（由 GetEffectiveSpellLevel 处理）。
+    bool cursed_ground = (mgr->spec_terr_type == 2);
+
+    // 禁魔披风（Recanter's Cloak）：佩戴方只能施放 1-2 级魔法。
+    bool recanter = hero->DoesWearArtifact(AID_RECANTERS_CLOAK);
+
+    // 综合最高可用法术等级：诅咒之地→1，禁魔披风→2，否则→5。
+    int max_spell_level = 5;
+    if (cursed_ground) max_spell_level = 1;
+    else if (recanter) max_spell_level = 2;
+
     static const int kCountedDamageSpells[] = {
         SPL_MAGIC_ARROW,            // ID 15, Lv1, Magic Arrow，魔法神箭
         SPL_ICE_BOLT,               // ID 16, Lv2, Ice Bolt，霹雳寒冰
@@ -296,9 +308,12 @@ static int CalcHeroSpellPower(_BattleMgr_* mgr, int side)
         if (spell_id < 0 || spell_id >= 70) continue;
         if (!hero->spell[spell_id]) continue;
 
-        int level = GetHeroEffectiveSpellLevel(hero, spell_id);
-
         _Spell_& spell = o_Spell[spell_id];
+
+        // 跳过被禁魔地形/禁魔披风限制的法术等级
+        if (spell.level > max_spell_level) continue;
+
+        int level = GetHeroEffectiveSpellLevel(hero, spell_id);
         int damage = spell.effect[level] + spell.eff_power * spell_power;
 
         // 法术特长：原版函数按英雄等级、特长法术、目标生物等级计算额外加成。
