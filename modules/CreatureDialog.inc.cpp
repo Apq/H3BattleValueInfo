@@ -1,4 +1,4 @@
-// ========== 战斗价值显示与远程力量对比 ==========
+// ========== 战斗价值显示与远程输出对比 ==========
 
 static int s_diag_dlgdefproc_count = 0;
 
@@ -17,6 +17,8 @@ static char* FindDlgItem(_Dlg_* dlg, short target_id)
 }
 
 static void DestroyRangedPanel();
+static _Fnt_* GetRangedPanelTextFont();
+static unsigned int ComputeStackChecksum(_BattleMgr_* mgr);
 
 static const int RP_ID_BG = 32000;
 static const int RP_ID_TEXT0 = 32001;
@@ -185,24 +187,135 @@ int __stdcall Hook_DlgDefProc(HiHook* h, _Dlg_* dlg, _EventMsg_* msg)
     return CALL_2(int, __thiscall, h->GetDefaultFunc(), dlg, msg);
 }
 
-// ========== 战场顶部远程力量面板 ==========
+// ========== 战场顶部远程输出面板 ==========
+
+static int CalcRangedOutputToTarget(_BattleMgr_* mgr, int side, _BattleStack_* target)
+{
+    if (!mgr || side < 0 || side > 1 || !target || target->count_current <= 0) return 0;
+
+    __int64 output = 0;
+    for (int slot = 0; slot < 21; ++slot) {
+        _BattleStack_* shooter = &mgr->stack[side][slot];
+        if (shooter->count_current <= 0 || shooter->creature.shots <= 0) continue;
+
+        // 交给原版 CanShoot 判断贴脸、障碍、城墙、弹药、幻影神弓/金弓等射击可行性。
+        // 如果不能射击该目标，则这个 shooter 对该目标的远程输出按 0 计。
+        if (!shooter->CanShoot(target)) continue;
+
+        // 原版基础伤害：_BattleStack_::CalcBaseDamage(0) @ 0x442E80。
+        // 原版射击流程也是先调用 0x442E80，再把结果传给 Calc_Damage_Bonuses(0x443C60)。
+        // 这里不再手写平均伤害，以便祝福、诅咒、蛊惑/多头等基础伤害相关状态走原版逻辑。
+        int base_damage = CALL_2(int, __thiscall, 0x442E80, shooter, 0);
+        if (base_damage <= 0) continue;
+
+        int fireshield_damage = 0;
+        int damage = shooter->Calc_Damage_Bonuses(target, base_damage, TRUE, TRUE, 0, &fireshield_damage);
+        if (damage > 0) output += damage;
+    }
+    if (output > 0x7FFFFFFF) return 0x7FFFFFFF;
+    return (int)output;
+}
 
 static int CalcRangedUnitsPower(_BattleMgr_* mgr, int side)
 {
     if (!mgr || side < 0 || side > 1) return 0;
-    int power = 0;
-    for (int slot = 0; slot < 21; slot++) {
-        const _BattleStack_& s = mgr->stack[side][slot];
-        if (s.count_current > 0 && s.creature.shots > 0)
-            power += s.creature.fight_value * s.count_current;
+
+    int enemy_side = 1 - side;
+    bool has_target = false;
+    int min_output = 0x7FFFFFFF;
+
+    for (int slot = 0; slot < 21; ++slot) {
+        _BattleStack_* target = &mgr->stack[enemy_side][slot];
+        if (target->count_current <= 0) continue;
+
+        has_target = true;
+        int output = CalcRangedOutputToTarget(mgr, side, target);
+        if (output < min_output) min_output = output;
     }
-    return power;
+    return has_target ? min_output : 0;
+}
+
+static int GetHeroEffectiveSpellLevel(_Hero_* hero, int spell_id)
+{
+    if (!hero || spell_id < 0 || spell_id >= 70) return 0;
+
+    // 原版：_Hero_::GetEffectiveSpellLevel @ 0x4E52F0。
+    // this=hero, arg1=spell_id, arg2=land_modifier。
+    // 会综合英雄气/水/火/土魔法等级、魔法地形、飞行术等特殊规则。
+    int land_modifier = hero->GetLandModifierUnder();
+    int level = CALL_3(int, __thiscall, 0x4E52F0, hero, spell_id, land_modifier);
+    if (level < 0) level = 0;
+    if (level > 3) level = 3;
+    return level;
+}
+
+static int ApplySpellDamageArtifactBonuses(_Hero_* hero, int spell_id, int damage)
+{
+    if (!hero || spell_id < 0 || spell_id >= 70 || damage <= 0) return damage;
+
+    // 四系灵球：对应学派法术最终伤害 +50%。
+    // 这里按 o_Spell.school_flags 判断法术学派；多学派法术只加成一次。
+    const unsigned school = o_Spell[spell_id].school_flags;
+    bool boosted = false;
+    if ((school & SSF_AIR) && hero->DoesWearArtifact(AID_ORB_OF_THE_FIRMAMENT)) boosted = true;
+    if ((school & SSF_EARTH) && hero->DoesWearArtifact(AID_ORB_OF_SILT)) boosted = true;
+    if ((school & SSF_FIRE) && hero->DoesWearArtifact(AID_ORB_OF_TEMPESTUOUS_FIRE)) boosted = true;
+    if ((school & SSF_WATER) && hero->DoesWearArtifact(AID_ORB_OF_DRIVING_RAIN)) boosted = true;
+
+    if (boosted) damage = damage * 150 / 100;
+    return damage;
 }
 
 static int CalcHeroSpellPower(_BattleMgr_* mgr, int side)
 {
-    // TODO: 攻击魔法对应的远程力量公式待定；先保留面板行位。
-    return 0;
+    if (!mgr || side < 0 || side > 1) return 0;
+
+    _Hero_* hero = mgr->hero[side];
+    if (!hero) return 0;
+
+    // 只要求英雄有魔法书；不检查当前魔法值，也不检查本回合是否已经施法。
+    if (hero->doll_art[AS_SPELL_BOOK].id == -1) return 0;
+
+    static const int kCountedDamageSpells[] = {
+        SPL_MAGIC_ARROW,            // ID 15, Lv1, Magic Arrow，魔法神箭
+        SPL_ICE_BOLT,               // ID 16, Lv2, Ice Bolt，霹雳寒冰
+        SPL_LIGHTNING_BOLT,         // ID 17, Lv2, Lightning Bolt，霹雳闪电
+        SPL_FROST_RING,             // ID 20, Lv3, Frost Ring，寒冰魔环
+        SPL_FIREBALL,               // ID 21, Lv3, Fireball，连珠火球
+        SPL_METEOR_SHOWER,          // ID 23, Lv4, Meteor Shower，流星火雨
+        SPL_IMPLOSION,              // ID 18, Lv5, Implosion，雷鸣爆弹
+        SPL_TITANS_LIGHTNING_BOLT,  // ID 57, Lv5, Titan's Lightning Bolt，泰坦之箭
+    };
+
+    int best = 0;
+    int spell_power = hero->power;
+    if (spell_power < 1) spell_power = 1;
+
+    for (int i = 0; i < sizeof(kCountedDamageSpells) / sizeof(kCountedDamageSpells[0]); ++i) {
+        int spell_id = kCountedDamageSpells[i];
+        if (spell_id < 0 || spell_id >= 70) continue;
+        if (!hero->spell[spell_id]) continue;
+
+        int level = GetHeroEffectiveSpellLevel(hero, spell_id);
+
+        _Spell_& spell = o_Spell[spell_id];
+        int damage = spell.effect[level] + spell.eff_power * spell_power;
+
+        // 法术特长：原版函数按英雄等级、特长法术、目标生物等级计算额外加成。
+        // 当前“魔法输出能力”不考虑敌方目标，无目标估算参数固定用 1。
+        damage += hero->GetSpell_Specialisation_Bonuses(spell_id, 1, damage);
+
+        // 魔力 Sorcery：Basic +5%，Advanced +10%，Expert +15%。
+        int sorcery = hero->second_skill[HSS_SORCERY];
+        if (sorcery == 1) damage = damage * 105 / 100;
+        else if (sorcery == 2) damage = damage * 110 / 100;
+        else if (sorcery >= 3) damage = damage * 115 / 100;
+
+        damage = ApplySpellDamageArtifactBonuses(hero, spell_id, damage);
+
+        if (damage > best) best = damage;
+    }
+    return best;
 }
 
 static bool s_battle_end_logged = false;
@@ -466,6 +579,21 @@ static _Pcx8_* QuantizeRgbAsPcx8(unsigned char* rgb, int w, int h, _Pcx8_* palSr
     return pcx8;
 }
 
+static unsigned int ComputeStackChecksum(_BattleMgr_* mgr)
+{
+    if (!mgr) return 0;
+    unsigned int hash = 2166136261u; // FNV offset
+    for (int side = 0; side < 2; ++side)
+        for (int slot = 0; slot < 21; ++slot) {
+            const _BattleStack_& s = mgr->stack[side][slot];
+            hash ^= (unsigned)(s.count_current & 0xFFFF);
+            hash *= 16777619u;
+            hash ^= (unsigned)(s.creature_id & 0xFF);
+            hash *= 16777619u;
+        }
+    return hash;
+}
+
 static _Pcx8_* LoadPanelImageAsPcx8()
 {
     if (!cfg.ranged_panel_image[0]) return nullptr;
@@ -497,73 +625,207 @@ static _Pcx8_* LoadPanelImageAsPcx8()
     return pcx8;
 }
 
-static _Pcx8_* s_ranged_panel_bg = nullptr;
-static _Dlg_* s_last_battle_dlg = nullptr;
-static _BattleMgr_* s_last_battle_mgr = nullptr;
-static bool s_ranged_panel_active = true;
-static bool s_ranged_panel_suppressed_for_result = false;
-static int s_ranged_panel_last_x = -1;
-static int s_ranged_panel_last_y = -1;
-static int s_ranged_panel_last_w = 0;
-static int s_ranged_panel_last_h = 0;
-
-static void HideRangedPanelItems(_Dlg_* dlg)
+class RangedOverlayPanel
 {
-    if (!dlg) return;
-    for (int id = RP_ID_BG; id <= RP_ID_TEXT0 + 5; ++id) {
-        _DlgItem_* item = (_DlgItem_*)FindDlgItem(dlg, (short)id);
-        if (item) item->Hide();
+public:
+    RangedOverlayPanel()
+    {
+        ResetRuntimeState();
     }
-}
 
-static void ShowRangedPanelItems(_Dlg_* dlg)
-{
-    if (!dlg) return;
-    for (int id = RP_ID_BG; id <= RP_ID_TEXT0 + 5; ++id) {
-        _DlgItem_* item = (_DlgItem_*)FindDlgItem(dlg, (short)id);
-        if (item) item->Show();
+    void MarkDirty(const char* reason)
+    {
+        dirty_ = true;
+        if (reason) WriteLog("[RangedOverlayPanel] dirty: %s", reason);
     }
-}
 
-static void EnsureRangedPanelItems(_BattleMgr_* mgr, int x, int y, int panel_w, int panel_h, int left_x, int right_x, int col_w, int text_h)
-{
-    if (!mgr || !mgr->dlg) return;
-    _Dlg_* dlg = mgr->dlg;
+    void Destroy()
+    {
+        active_ = false;
+        ReleaseBackground();
+        ResetText();
+        if (o_BattleMgr) o_BattleMgr->RedrawBattlefield(FALSE, TRUE, FALSE, 0, TRUE, FALSE);
+    }
 
-    if (!FindDlgItem(dlg, RP_ID_BG)) {
-        if (!s_ranged_panel_bg) s_ranged_panel_bg = LoadPanelImageAsPcx8();
-        _DlgStaticPcx8_* bg = _DlgStaticPcx8_::Create(x, y, panel_w, panel_h, RP_ID_BG, (char*)"DlgBluBk.PCX");
-        if (bg) {
-            if (bg->pcx8) bg->pcx8->DerefOrDestruct();
-            bg->pcx8 = s_ranged_panel_bg;
-            if (s_ranged_panel_bg) ++s_ranged_panel_bg->ref_count;
-            bg->width = (unsigned short)panel_w;
-            bg->height = (unsigned short)panel_h;
-            dlg->AddItemToOwnArrayList(bg);
-            dlg->AttachItem(bg, 30000);
+    void Draw(_BattleMgr_* mgr)
+    {
+        if (!mgr || !mgr->dlg) return;
+        _Pcx16_* screen = o_WndMgr ? o_WndMgr->screen_pcx16 : nullptr;
+        if (!screen) return;
+
+        _Dlg_* dlg = mgr->dlg;
+
+        if (diag_draw_count_ < 20) {
+            ++diag_draw_count_;
+            WriteLog("[Diag] RangedOverlayPanel::Draw #%d mgr=%p dlg=%p active=%d currentDlg=%p",
+                diag_draw_count_, mgr, dlg, active_ ? 1 : 0, o_CurrentDlg);
         }
 
-        const char* fontName = cfg.ranged_panel_text_font[0] ? cfg.ranged_panel_text_font : "smalfont.fnt";
-        for (int i = 0; i < 6; ++i) {
-            int row = i / 2;
-            int xx = (i % 2 == 0) ? left_x : right_x;
-            int align = (i % 2 == 0) ? 2 : 0;
-            int yy = y + cfg.row_y[row];
-            _DlgStaticText_* t = _DlgStaticText_::Create(xx, yy, col_w, text_h, (char*)"0", (char*)fontName,
-                (_dword_)cfg.ranged_panel_text_color, RP_ID_TEXT0 + i, align, -1);
-            if (t) { dlg->AddItemToOwnArrayList(t); dlg->AttachItem(t, 30001 + i); }
+        // 新战斗管理器出现时，重置运行态并置脏：进入战斗后首次绘制计算一次。
+        if (last_mgr_ != mgr) {
+            last_mgr_ = mgr;
+            active_ = true;
+            suppressed_for_result_ = false;
+            stack_checksum_ = 0;
+            ResetText();
+            MarkDirty("new battle manager");
         }
-        WriteLog("[RangedPanel] dlg items created: dlg=%p pos=(%d,%d,%d,%d)", dlg, x, y, panel_w, panel_h);
+
+        // 新战斗窗口出现时，重新加载背景并置脏；位置仍按战斗 dlg 计算。
+        if (last_dlg_ != dlg) {
+            last_dlg_ = dlg;
+            active_ = true;
+            s_battle_end_logged = false;
+            stack_checksum_ = 0;
+            ResetText();
+            ReleaseBackground();
+            MarkDirty("new battle dialog");
+        }
+
+        if (!active_) return;
+        if (suppressed_for_result_) return;
+        if (IsBattleEnded(mgr)) {
+            Destroy();
+            return;
+        }
+
+        if (!battle_area_logged_) {
+            battle_area_logged_ = true;
+            WriteLog("[RangedOverlayPanel] screen=%dx%d dlg=(%d,%d,%d,%d)",
+                screen->width, screen->height,
+                dlg->x, dlg->y, dlg->width, dlg->height);
+        }
+
+        int panel_w = cfg.ranged_panel_width;
+        int panel_h = cfg.ranged_panel_height;
+        int text_h = 17;
+
+        // 独立 overlay panel 的屏幕坐标：位置保持旧逻辑，水平居中于战斗窗口，吸附到外侧上方。
+        int x = dlg->x + (dlg->width - panel_w) / 2;
+        if (x < 0) x = 0;
+        int y = dlg->y - panel_h - cfg.ranged_panel_y;
+        if (y < 0) y = 0;
+
+        int pad_x = 16;
+        int mid_gap = 16;
+        int col_w = (panel_w - pad_x * 2 - mid_gap) / 2;
+        if (col_w < 40) col_w = panel_w / 2;
+        int left_x = x + pad_x;
+        int right_x = x + panel_w - pad_x - col_w;
+
+        EnsureBackground();
+        if (bg_) {
+            int bw = bg_->width;
+            int bh = bg_->height;
+            int draw_w = (bw < panel_w) ? bw : panel_w;
+            int draw_h = (bh < panel_h) ? bh : panel_h;
+            last_x_ = x;
+            last_y_ = y;
+            last_w_ = draw_w;
+            last_h_ = draw_h;
+            bg_->DrawToPcx16(0, 0, draw_w, draw_h, screen, x, y, FALSE);
+        }
+
+        // 正常帧只画缓存文本；dirty 或空缓存时才重算。
+        if (dirty_ || !text_[0][0]) {
+            Recalculate(mgr, dirty_ ? "dirty" : "empty cache");
+        }
+
+        _Fnt_* font = GetRangedPanelTextFont();
+        if (font) {
+            for (int row = 0; row < 3; ++row) {
+                int yy = y + cfg.row_y[row];
+                font->DrawTextToPcx16(text_[row * 2], screen, left_x, yy, col_w, text_h, (_byte_)cfg.ranged_panel_text_color, 2, 0);
+                font->DrawTextToPcx16(text_[row * 2 + 1], screen, right_x, yy, col_w, text_h, (_byte_)cfg.ranged_panel_text_color, 0, 0);
+            }
+        }
     }
 
-    ShowRangedPanelItems(dlg);
-}
+    int LastX() const { return last_x_; }
+    int LastY() const { return last_y_; }
+    int LastW() const { return last_w_; }
+    int LastH() const { return last_h_; }
+    bool Active() const { return active_; }
+
+private:
+    void ResetRuntimeState()
+    {
+        bg_ = nullptr;
+        last_dlg_ = nullptr;
+        last_mgr_ = nullptr;
+        active_ = true;
+        suppressed_for_result_ = false;
+        last_x_ = -1;
+        last_y_ = -1;
+        last_w_ = 0;
+        last_h_ = 0;
+        battle_area_logged_ = false;
+        diag_draw_count_ = 0;
+        dirty_ = true;
+        stack_checksum_ = 0;
+        ResetText();
+    }
+
+    void ResetText()
+    {
+        memset(text_, 0, sizeof(text_));
+        dirty_ = true;
+    }
+
+    void EnsureBackground()
+    {
+        if (!bg_) bg_ = LoadPanelImageAsPcx8();
+    }
+
+    void ReleaseBackground()
+    {
+        if (bg_) { bg_->DerefOrDestruct(); bg_ = nullptr; }
+    }
+
+    void Recalculate(_BattleMgr_* mgr, const char* reason)
+    {
+        if (!mgr) return;
+
+        unsigned int checksum = ComputeStackChecksum(mgr);
+        stack_checksum_ = checksum;
+        int ranged[2] = { CalcRangedUnitsPower(mgr, 0), CalcRangedUnitsPower(mgr, 1) };
+        int spell[2] = { CalcHeroSpellPower(mgr, 0), CalcHeroSpellPower(mgr, 1) };
+        int total[2] = { ranged[0] + spell[0], ranged[1] + spell[1] };
+
+        _snprintf(text_[0], sizeof(text_[0]) - 1, "%d", ranged[0]);
+        _snprintf(text_[1], sizeof(text_[1]) - 1, "%d", ranged[1]);
+        _snprintf(text_[2], sizeof(text_[2]) - 1, "%d", spell[0]);
+        _snprintf(text_[3], sizeof(text_[3]) - 1, "%d", spell[1]);
+        _snprintf(text_[4], sizeof(text_[4]) - 1, "%d", total[0]);
+        _snprintf(text_[5], sizeof(text_[5]) - 1, "%d", total[1]);
+        for (int i = 0; i < 6; ++i) text_[i][sizeof(text_[i]) - 1] = 0;
+
+        dirty_ = false;
+        WriteLog("[RangedOverlayPanel] recalculated reason=%s checksum=%u ranged=(%d,%d) spell=(%d,%d) total=(%d,%d)",
+            reason ? reason : "unknown", checksum, ranged[0], ranged[1], spell[0], spell[1], total[0], total[1]);
+    }
+
+    _Pcx8_* bg_;
+    _Dlg_* last_dlg_;
+    _BattleMgr_* last_mgr_;
+    bool active_;
+    bool suppressed_for_result_;
+    int last_x_;
+    int last_y_;
+    int last_w_;
+    int last_h_;
+    bool battle_area_logged_;
+    int diag_draw_count_;
+    bool dirty_;
+    unsigned int stack_checksum_;
+    char text_[6][64];
+};
+
+static RangedOverlayPanel s_ranged_overlay_panel;
 
 static void DestroyRangedPanel()
 {
-    s_ranged_panel_active = false;
-    if (s_ranged_panel_bg) { s_ranged_panel_bg->DerefOrDestruct(); s_ranged_panel_bg = nullptr; }
-    if (o_BattleMgr) o_BattleMgr->RedrawBattlefield(FALSE, TRUE, FALSE, 0, TRUE, FALSE);
+    s_ranged_overlay_panel.Destroy();
 }
 
 static _Fnt_* GetRangedPanelTextFont()
@@ -578,171 +840,16 @@ static _Fnt_* GetRangedPanelTextFont()
     return o_Smalfont_Fnt;
 }
 
-static bool s_battle_area_logged = false;
-static int s_diag_battle_redraw_count = 0;
-static int s_diag_panel_draw_count = 0;
-static bool s_panel_was_drawn = false; // 上一帧是否画面板，用于战斗结束时清理
-
-// ---- 脏标记：只在战场状态变化时才重新计算 ----
-static unsigned int s_stack_checksum = 0;
-static char s_cached_text[6][64] = {{0}};
-
-static unsigned int ComputeStackChecksum(_BattleMgr_* mgr)
+static void MarkRangedPanelDirty(const char* reason)
 {
-    if (!mgr) return 0;
-    unsigned int hash = 2166136261u; // FNV offset
-    for (int side = 0; side < 2; ++side)
-        for (int slot = 0; slot < 21; ++slot) {
-            const _BattleStack_& s = mgr->stack[side][slot];
-            hash ^= (unsigned)(s.count_current & 0xFFFF);
-            hash *= 16777619u;
-            hash ^= (unsigned)(s.creature_id & 0xFF);
-            hash *= 16777619u;
-        }
-    return hash;
-}
-static void LogDlgBrief(const char* tag, _Dlg_* dlg)
-{
-    if (!dlg) {
-        WriteLog("[Diag] %s dlg=null", tag);
-        return;
-    }
-    WriteLog("[Diag] %s dlg=%p rect=(%d,%d,%d,%d) currentDlg=%p battleDlg=%p active=%d lastPanel=(%d,%d,%d,%d)",
-        tag, dlg, dlg->x, dlg->y, dlg->width, dlg->height,
-        o_CurrentDlg, o_BattleMgr ? o_BattleMgr->dlg : nullptr,
-        s_ranged_panel_active ? 1 : 0,
-        s_ranged_panel_last_x, s_ranged_panel_last_y, s_ranged_panel_last_w, s_ranged_panel_last_h);
-}
-
-static void DrawRangedPanelToScreen(_BattleMgr_* mgr)
-{
-    if (!mgr || !mgr->dlg) return;
-    _Pcx16_* screen = o_WndMgr ? o_WndMgr->screen_pcx16 : nullptr;
-    if (!screen) return;
-
-    _Dlg_* dlg = mgr->dlg;
-
-    if (s_diag_panel_draw_count < 20) {
-        ++s_diag_panel_draw_count;
-        WriteLog("[Diag] DrawRangedPanel #%d mgr=%p dlg=%p active=%d currentDlg=%p",
-            s_diag_panel_draw_count, mgr, dlg, s_ranged_panel_active ? 1 : 0, o_CurrentDlg);
-    }
-
-    // 新战斗管理器出现时，重置结果锁。
-    if (s_last_battle_mgr != mgr) {
-        s_last_battle_mgr = mgr;
-        s_ranged_panel_suppressed_for_result = false;
-        s_ranged_panel_active = true;
-        s_stack_checksum = 0;
-        memset(s_cached_text, 0, sizeof(s_cached_text));
-        s_panel_was_drawn = false;
-    }
-
-    // 新战斗（dlg 变化）时重新启用并重新加载背景。
-    if (s_last_battle_dlg != dlg) {
-        s_last_battle_dlg = dlg;
-        s_ranged_panel_active = true;
-        s_battle_end_logged = false;
-        s_stack_checksum = 0;
-        memset(s_cached_text, 0, sizeof(s_cached_text));
-        s_panel_was_drawn = false;
-        if (s_ranged_panel_bg) { s_ranged_panel_bg->DerefOrDestruct(); s_ranged_panel_bg = nullptr; }
-    }
-
-    if (!s_ranged_panel_active) {
-        s_panel_was_drawn = false;
-        return;
-    }
-    if (s_ranged_panel_suppressed_for_result) return;
-    if (IsBattleEnded(mgr)) {
-        s_panel_was_drawn = false;
-        DestroyRangedPanel();
-        return;
-    }
-
-    if (!s_battle_area_logged) {
-        s_battle_area_logged = true;
-        WriteLog("[RangedPanel] screen=%dx%d dlg=(%d,%d,%d,%d)",
-            screen->width, screen->height,
-            dlg->x, dlg->y, dlg->width, dlg->height);
-    }
-
-    int panel_w = cfg.ranged_panel_width;
-    int panel_h = cfg.ranged_panel_height;
-    int text_h = 17;
-
-    // 直接屏幕坐标：水平居中于战场对话框，吸附到外侧上方。
-    int x = dlg->x + (dlg->width - panel_w) / 2;
-    if (x < 0) x = 0;
-    int y = dlg->y - panel_h - cfg.ranged_panel_y;
-    if (y < 0) y = 0;
-
-    // 文字区域按面板自动分两列。
-    int pad_x = 16;
-    int mid_gap = 16;
-    int col_w = (panel_w - pad_x * 2 - mid_gap) / 2;
-    if (col_w < 40) col_w = panel_w / 2;
-    int left_x = x + pad_x;
-    int right_x = x + panel_w - pad_x - col_w;
-
-    if (!s_ranged_panel_bg) s_ranged_panel_bg = LoadPanelImageAsPcx8();
-    if (s_ranged_panel_bg) {
-        int bw = s_ranged_panel_bg->width;
-        int bh = s_ranged_panel_bg->height;
-        int draw_w = (bw < panel_w) ? bw : panel_w;
-        int draw_h = (bh < panel_h) ? bh : panel_h;
-        s_ranged_panel_last_x = x;
-        s_ranged_panel_last_y = y;
-        s_ranged_panel_last_w = draw_w;
-        s_ranged_panel_last_h = draw_h;
-        // 画面板背景
-        s_ranged_panel_bg->DrawToPcx16(0, 0, draw_w, draw_h, screen, x, y, FALSE);
-        s_panel_was_drawn = true;
-
-    }
-
-    unsigned int checksum = ComputeStackChecksum(mgr);
-    if (checksum != s_stack_checksum || !s_cached_text[0][0]) {
-        s_stack_checksum = checksum;
-        int ranged[2] = { CalcRangedUnitsPower(mgr, 0), CalcRangedUnitsPower(mgr, 1) };
-        int spell[2] = { CalcHeroSpellPower(mgr, 0), CalcHeroSpellPower(mgr, 1) };
-        int total[2] = { ranged[0] + spell[0], ranged[1] + spell[1] };
-
-        _snprintf(s_cached_text[0], sizeof(s_cached_text[0]) - 1, "%d", ranged[0]);
-        _snprintf(s_cached_text[1], sizeof(s_cached_text[1]) - 1, "%d", ranged[1]);
-        _snprintf(s_cached_text[2], sizeof(s_cached_text[2]) - 1, "%d", spell[0]);
-        _snprintf(s_cached_text[3], sizeof(s_cached_text[3]) - 1, "%d", spell[1]);
-        _snprintf(s_cached_text[4], sizeof(s_cached_text[4]) - 1, "%d", total[0]);
-        _snprintf(s_cached_text[5], sizeof(s_cached_text[5]) - 1, "%d", total[1]);
-        for (int i = 0; i < 6; ++i) s_cached_text[i][sizeof(s_cached_text[i]) - 1] = 0;
-
-        WriteLog("[RangedPanel] recalculated checksum=%u ranged=(%d,%d) spell=(%d,%d) total=(%d,%d)",
-            checksum, ranged[0], ranged[1], spell[0], spell[1], total[0], total[1]);
-    }
-
-    _Fnt_* font = GetRangedPanelTextFont();
-    if (font) {
-        for (int row = 0; row < 3; ++row) {
-            int yy = y + cfg.row_y[row];
-            font->DrawTextToPcx16(s_cached_text[row * 2], screen, left_x, yy, col_w, text_h, (_byte_)cfg.ranged_panel_text_color, 2, 0);
-            font->DrawTextToPcx16(s_cached_text[row * 2 + 1], screen, right_x, yy, col_w, text_h, (_byte_)cfg.ranged_panel_text_color, 0, 0);
-        }
-    }
+    s_ranged_overlay_panel.MarkDirty(reason);
 }
 
 static void UpdateRangedPanel(_BattleMgr_* mgr)
 {
-    DrawRangedPanelToScreen(mgr);
+    s_ranged_overlay_panel.Draw(mgr);
 }
 
-
-static void CleanPanelBeforeResult()
-{
-    s_panel_was_drawn = false;
-    s_ranged_panel_suppressed_for_result = true;
-    s_ranged_panel_active = false;
-    if (s_ranged_panel_bg) { s_ranged_panel_bg->DerefOrDestruct(); s_ranged_panel_bg = nullptr; }
-}
 
 int __stdcall Hook_BattleRedraw(HiHook* h, _BattleMgr_* mgr, _bool8_ flip, _bool8_ set_battle_redraws, _bool8_ use_battle_redraws, int waiting_time, _bool8_ redraw_background, _bool8_ wait)
 {
@@ -751,56 +858,27 @@ int __stdcall Hook_BattleRedraw(HiHook* h, _BattleMgr_* mgr, _bool8_ flip, _bool
     return 0;
 }
 
-// LoHook: 在 0x476DA0 (AI 决策主函数) 内部、调用 CPResult 之前拦截。
-// 0x477200 和 0x4772B0 是 push 参数序列的起始，我们在 LoHook 里提前清屏。
-int __stdcall Hook_PreCombatResult_A(LoHook* h, HookContext* c)
+// Combat_StartBattle @ 0x4781C0：进入战斗时先置脏，首次绘制计算。
+int __stdcall Hook_CombatStartBattle(HiHook* h, _BattleMgr_* mgr)
 {
-    WriteLog("[RangedPanel] PreCombatResult_A (0x477200) panel_was_drawn=%d", s_panel_was_drawn ? 1 : 0);
-    CleanPanelBeforeResult();
-    return EXEC_DEFAULT;
+    int result = CALL_1(int, __thiscall, h->GetDefaultFunc(), mgr);
+    MarkRangedPanelDirty("combat start");
+    return result;
 }
 
-int __stdcall Hook_PreCombatResult_B(LoHook* h, HookContext* c)
+// MagicSystem_2 @ 0x464F10：战斗内施法流程。原函数返回后置脏，下一次绘制刷新。
+int __stdcall Hook_CombatCastSpell(HiHook* h, _BattleMgr_* mgr, int x, int y)
 {
-    WriteLog("[RangedPanel] PreCombatResult_B (0x4772B0) panel_was_drawn=%d", s_panel_was_drawn ? 1 : 0);
-    CleanPanelBeforeResult();
-    return EXEC_DEFAULT;
+    CALL_3(void, __thiscall, h->GetDefaultFunc(), mgr, x, y);
+    MarkRangedPanelDirty("spell cast");
+    return 0;
 }
 
-void __stdcall Hook_CombatResultDlg(HiHook* h, void* resultDlg, int a1, int a2, int a3, int a4, int a5, int a6)
+// FUN_004746B0：战斗行动处理主函数，覆盖人类/电脑 stack 行动后的状态变化。
+// 返回后置脏；绘制时只在 dirty=true 时重算，不会每帧完整重算。
+int __stdcall Hook_CombatActionHandler(HiHook* h, _BattleMgr_* mgr, int msg)
 {
-    WriteLog("[Diag] 0x46FE20 CPResult construct active=%d panel_was_drawn=%d lastPanel=(%d,%d,%d,%d)",
-        s_ranged_panel_active ? 1 : 0, s_panel_was_drawn ? 1 : 0,
-        s_ranged_panel_last_x, s_ranged_panel_last_y, s_ranged_panel_last_w, s_ranged_panel_last_h);
-    s_ranged_panel_suppressed_for_result = true;
-    s_ranged_panel_active = false;
-    if (s_ranged_panel_bg) { s_ranged_panel_bg->DerefOrDestruct(); s_ranged_panel_bg = nullptr; }
-
-    CALL_7(void, __thiscall, h->GetDefaultFunc(), resultDlg, a1, a2, a3, a4, a5, a6);
-}
-
-void __stdcall Hook_CombatResultRun(HiHook* h, void* resultDlg)
-{
-    // 结果窗口是模态的；这里只停止面板后续重绘，不再尝试擦外侧旧像素。
-    s_ranged_panel_suppressed_for_result = true;
-    s_ranged_panel_active = false;
-    CALL_1(void, __thiscall, h->GetDefaultFunc(), resultDlg);
-}
-
-void __stdcall Hook_CombatResultDestroy(HiHook* h, void* resultDlg)
-{
-    WriteLog("[Diag] 0x4715C0 CPResult destroy enter this=%p active=%d", resultDlg, s_ranged_panel_active ? 1 : 0);
-    CALL_1(void, __thiscall, h->GetDefaultFunc(), resultDlg);
-    WriteLog("[Diag] 0x4715C0 CPResult destroy leave this=%p active=%d", resultDlg, s_ranged_panel_active ? 1 : 0);
-    // 战斗伤亡界面关闭后，如果取消回到战斗，允许下一次战斗重绘重新创建面板。
-    s_ranged_panel_suppressed_for_result = false;
-    s_ranged_panel_active = true;
-}
-
-int __stdcall Hook_WndMgrRunDlg(HiHook* h, void* wndMgr, void* dlg, void* proc, int a3)
-{
-    WriteLog("[Diag] 0x602AE0 WndMgrRun wnd=%p dlg=%p proc=%p a3=%d battleMgr=%p battleDlg=%p currentDlg=%p active=%d",
-        wndMgr, dlg, proc, a3, o_BattleMgr, o_BattleMgr ? o_BattleMgr->dlg : nullptr, o_CurrentDlg,
-        s_ranged_panel_active ? 1 : 0);
-    return CALL_4(int, __thiscall, h->GetDefaultFunc(), wndMgr, dlg, proc, a3);
+    int result = CALL_2(int, __thiscall, h->GetDefaultFunc(), mgr, msg);
+    MarkRangedPanelDirty("stack action");
+    return result;
 }

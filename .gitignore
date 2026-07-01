@@ -57,6 +57,10 @@ compile_commands.json
 *.log
 *.bak
 *.swp
+tmp_*
+*.vcxproj.user
+插件开发-*.json
+插件开发-*.md
 
 # vcpkg
 vcpkg_installed/

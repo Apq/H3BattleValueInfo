@@ -8,18 +8,15 @@ static void StartPlugin()
     _PI->WriteLoHook(0x5F491E, Hook_BuildTown);
     _PI->WriteHiHook(0x41B120, SPLICE_, EXTENDED_, THISCALL_, Hook_DlgDefProc);
 
-    // 战场顶部常驻远程力量面板。
+    // 战场顶部常驻远程输出面板。
     _PI->WriteHiHook(0x493FC0, SPLICE_, EXTENDED_, THISCALL_, Hook_BattleRedraw);
-    // 在 AI 决策函数内部、CPResult 调用前清屏。
-    _PI->WriteLoHook(0x477200, Hook_PreCombatResult_A);
-    _PI->WriteLoHook(0x4772B0, Hook_PreCombatResult_B);
-    // 战斗结果界面（CPResult.pcx）运行/关闭时控制远程面板生命周期。
-    _PI->WriteHiHook(0x46FE20, SPLICE_, EXTENDED_, THISCALL_, Hook_CombatResultDlg);
-    _PI->WriteHiHook(0x4716C0, SPLICE_, EXTENDED_, THISCALL_, Hook_CombatResultRun);
-    _PI->WriteHiHook(0x4715C0, SPLICE_, EXTENDED_, THISCALL_, Hook_CombatResultDestroy);
-    _PI->WriteHiHook(0x602AE0, SPLICE_, EXTENDED_, THISCALL_, Hook_WndMgrRunDlg);
 
-    WriteLog("BattleValueInfo 已启用。Hook：FightValue(4), RangedPanel(5, diagnostic)。");
+    // 远程/魔法输出重算事件：进入战斗、施法后、stack 行动后。
+    _PI->WriteHiHook(0x4781C0, SPLICE_, EXTENDED_, THISCALL_, Hook_CombatStartBattle);
+    _PI->WriteHiHook(0x464F10, SPLICE_, EXTENDED_, THISCALL_, Hook_CombatCastSpell);
+    _PI->WriteHiHook(0x4746B0, SPLICE_, EXTENDED_, THISCALL_, Hook_CombatActionHandler);
+
+    WriteLog("BattleValueInfo 已启用。Hook：FightValue(4), RangedPanel(1), RangedPanelEvents(3)。");
 }
 
 // ========== DllMain ==========
