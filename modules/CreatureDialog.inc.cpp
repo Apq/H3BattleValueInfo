@@ -594,12 +594,169 @@ static unsigned int ComputeStackChecksum(_BattleMgr_* mgr)
     return hash;
 }
 
-// 加载原版 DlgBluBk.PCX 作为面板背景。
-// 使用 o_LoadPcx8 确保返回的 _Pcx8_ 是完整游戏资源对象，兼容 HD_TC2。
-static _Pcx8_* LoadPanelImageAsGamePcx8()
+// 通过 DirectDraw 离屏 surface 绘制背景图。
+// 解码 PCX → RGBA → 创建 DD 离屏 surface → Lock 写入像素 → Blt 到 backbuffer。
+// 完全绕开 HD_TC2 hook 和 screen_pcx16 buffer。
+
+struct DDBackgroundSurface
 {
-    return o_LoadPcx8((char*)"DlgBluBk.PCX");
+    LPDIRECTDRAWSURFACE dd_surface;
+    int width;
+    int height;
+};
+
+static DDBackgroundSurface* CreateDDBackground(const char* pcx_path)
+{
+    // 解码 PCX
+    unsigned char* data = nullptr;
+    int size = 0;
+    if (!ReadWholeFile(pcx_path, &data, &size)) return nullptr;
+    if (size < 128) { free(data); return nullptr; }
+
+    int bpp = data[3];
+    int xmin = *(short*)(data + 4);
+    int ymin = *(short*)(data + 6);
+    int xmax = *(short*)(data + 8);
+    int ymax = *(short*)(data + 10);
+    int nplanes = data[65];
+    int bpl = *(short*)(data + 66);
+    int w = xmax - xmin + 1;
+    int h = ymax - ymin + 1;
+
+    if (w <= 0 || h <= 0 || w > 4096 || h > 4096) { free(data); return nullptr; }
+    if (!(nplanes == 1 && bpp == 8)) { free(data); return nullptr; }
+
+    int rawSize = bpl * h;
+    unsigned char* raw = (unsigned char*)malloc(rawSize);
+    if (!raw) { free(data); return nullptr; }
+
+    int pos = 128, rp = 0;
+    while (rp < rawSize && pos < size) {
+        unsigned char b = data[pos++];
+        if ((b & 0xC0) == 0xC0) {
+            int cnt = b & 0x3F;
+            if (pos >= size) break;
+            unsigned char val = data[pos++];
+            for (int i = 0; i < cnt && rp < rawSize; ++i) raw[rp++] = val;
+        } else {
+            raw[rp++] = b;
+        }
+    }
+
+    unsigned char pal[768] = {0};
+    bool palFound = false;
+    if (size >= 769 && data[size - 769] == 0x0C) {
+        memcpy(pal, data + (size - 768), 768);
+        palFound = true;
+    }
+    if (!palFound) {
+        for (int i = size - 769; i >= 0; --i) {
+            if (data[i] == 0x0C && i + 768 < size) {
+                memcpy(pal, data + i + 1, 768);
+                palFound = true;
+                break;
+            }
+        }
+    }
+    free(data);
+
+    // 创建 DirectDraw 离屏 surface (16-bit RGB565)
+    DDSURFACEDESC ddsd;
+    memset(&ddsd, 0, sizeof(ddsd));
+    ddsd.dwSize = sizeof(ddsd);
+    ddsd.dwFlags = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT;
+    ddsd.ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN;
+    ddsd.dwWidth = w;
+    ddsd.dwHeight = h;
+
+    LPDIRECTDRAWSURFACE dd_surf = nullptr;
+    HRESULT hr = o_DD->CreateSurface(&ddsd, &dd_surf, nullptr);
+    if (FAILED(hr) || !dd_surf) {
+        WriteLog("[DDBackground] CreateSurface failed hr=0x%08X w=%d h=%d", hr, w, h);
+        free(raw);
+        return nullptr;
+    }
+
+    // Lock surface 并写入 RGB565 像素
+    DDSURFACEDESC lock_desc;
+    memset(&lock_desc, 0, sizeof(lock_desc));
+    lock_desc.dwSize = sizeof(lock_desc);
+    hr = dd_surf->Lock(nullptr, &lock_desc, DDLOCK_WAIT | DDLOCK_SURFACEMEMORYPTR, nullptr);
+    if (FAILED(hr)) {
+        WriteLog("[DDBackground] Lock failed hr=0x%08X", hr);
+        dd_surf->Release();
+        free(raw);
+        return nullptr;
+    }
+
+    _word_* dst_row = (_word_*)((_byte_*)lock_desc.lpSurface);
+    int dst_pitch_pixels = lock_desc.lPitch >> 1;
+
+    // 检测像素格式
+    DDPIXELFORMAT pf;
+    memset(&pf, 0, sizeof(pf));
+    pf.dwSize = sizeof(pf);
+    dd_surf->GetPixelFormat(&pf);
+
+    WriteLog("[DDBackground] locked w=%d h=%d pitch=%d bpp=%d RMask=0x%08X GMask=0x%08X BMask=0x%08X",
+        lock_desc.dwWidth, lock_desc.dwHeight, lock_desc.lPitch,
+        pf.dwRGBBitCount, pf.dwRBitMask, pf.dwGBitMask, pf.dwBBitMask);
+
+    if (pf.dwRGBBitCount == 16) {
+        // 16-bit：直接写 RGB565
+        for (int y = 0; y < h; y++) {
+            _word_* d = dst_row + y * dst_pitch_pixels;
+            _byte_* s = raw + y * bpl;
+            for (int x = 0; x < w; x++) {
+                unsigned char idx = s[x];
+                d[x] = RGB565_fromR8G8B8(pal[idx * 3], pal[idx * 3 + 1], pal[idx * 3 + 2]);
+            }
+        }
+    } else if (pf.dwRGBBitCount == 32) {
+        // 32-bit：写 RGBA
+        _dword_* d32 = (_dword_*)lock_desc.lpSurface;
+        int dst_pitch32 = lock_desc.lPitch >> 2;
+        for (int y = 0; y < h; y++) {
+            _dword_* d = d32 + y * dst_pitch32;
+            _byte_* s = raw + y * bpl;
+            for (int x = 0; x < w; x++) {
+                unsigned char idx = s[x];
+                d[x] = (0xFF << 24) | (pal[idx * 3] << 16) | (pal[idx * 3 + 1] << 8) | pal[idx * 3 + 2];
+            }
+        }
+    } else {
+        WriteLog("[DDBackground] unsupported bpp=%d", pf.dwRGBBitCount);
+    }
+
+    dd_surf->Unlock(nullptr);
+    free(raw);
+
+    DDBackgroundSurface* bg = new DDBackgroundSurface();
+    bg->dd_surface = dd_surf;
+    bg->width = w;
+    bg->height = h;
+    WriteLog("[DDBackground] created w=%d h=%d", w, h);
+    return bg;
 }
+
+static void DestroyDDBackground(DDBackgroundSurface* bg)
+{
+    if (!bg) return;
+    if (bg->dd_surface) { bg->dd_surface->Release(); bg->dd_surface = nullptr; }
+    delete bg;
+}
+
+static void DrawDDBackground(DDBackgroundSurface* bg, int dst_x, int dst_y, int dst_w, int dst_h)
+{
+    if (!bg || !bg->dd_surface) return;
+    RECT src_rect = { 0, 0, bg->width, bg->height };
+    RECT dst_rect = { dst_x, dst_y, dst_x + dst_w, dst_y + dst_h };
+    HRESULT hr = o_DDSurfaceBackBuffer->Blt(&dst_rect, bg->dd_surface, &src_rect, DDBLT_WAIT, nullptr);
+    if (FAILED(hr)) {
+        WriteLog("[DDBackground] Blt failed hr=0x%08X", hr);
+    }
+}
+
 
 class RangedOverlayPanel
 {
@@ -691,20 +848,14 @@ public:
 
         EnsureBackground();
         if (bg_) {
-            int bw = bg_->width;
-            int bh = bg_->height;
+            int draw_w = (bg_->width < panel_w) ? bg_->width : panel_w;
+            int draw_h = (bg_->height < panel_h) ? bg_->height : panel_h;
             last_x_ = x;
             last_y_ = y;
-            last_w_ = panel_w;
-            last_h_ = panel_h;
-            // 平铺 DlgBluBk.PCX 填充整个面板区域，使用游戏原函数 0x44FA80（兼容 HD_TC2）。
-            for (int ty = 0; ty < panel_h; ty += bh) {
-                for (int tx = 0; tx < panel_w; tx += bw) {
-                    int sw = (panel_w - tx < bw) ? (panel_w - tx) : bw;
-                    int sh = (panel_h - ty < bh) ? (panel_h - ty) : bh;
-                    bg_->DrawToPcx16(0, 0, sw, sh, screen, x + tx, y + ty, FALSE);
-                }
-            }
+            last_w_ = draw_w;
+            last_h_ = draw_h;
+            // 通过 DirectDraw Blt 绘制到 backbuffer，绕开 HD_TC2。
+            DrawDDBackground(bg_, x, y, draw_w, draw_h);
         }
 
         // 正常帧只画缓存文本；dirty 或空缓存时才重算。
@@ -755,12 +906,21 @@ private:
 
     void EnsureBackground()
     {
-        if (!bg_) bg_ = LoadPanelImageAsGamePcx8();
+        if (!bg_) {
+            char modulePath[MAX_PATH];
+            GetModuleFileNameA(g_hModule, modulePath, MAX_PATH);
+            char* slash = strrchr(modulePath, '\\');
+            if (slash) slash[1] = 0; else modulePath[0] = 0;
+            char path[2048];
+            _snprintf(path, sizeof(path) - 1, "%simg\\%s", modulePath, cfg.ranged_panel_image);
+            path[sizeof(path) - 1] = 0;
+            bg_ = CreateDDBackground(path);
+        }
     }
 
     void ReleaseBackground()
     {
-        // o_LoadPcx8 返回的游戏资源由游戏管理，不需要我们释放。
+        DestroyDDBackground(bg_);
         bg_ = nullptr;
     }
 
@@ -787,7 +947,7 @@ private:
             reason ? reason : "unknown", checksum, ranged[0], ranged[1], spell[0], spell[1], total[0], total[1]);
     }
 
-    _Pcx8_* bg_;
+    DDBackgroundSurface* bg_;
     _Dlg_* last_dlg_;
     _BattleMgr_* last_mgr_;
     bool active_;

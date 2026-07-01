@@ -3,6 +3,7 @@
 // 目标版本：Shadow of Death（SOD = 0xFFFFE403），仅 x86。
 // 依赖 MegaDesc 负责生物信息窗口扩展、背景、按钮、描述区布局。
 
+#include <ddraw.h>
 #include "homm3.h"
 #include <stdarg.h>
 #include <wchar.h>
