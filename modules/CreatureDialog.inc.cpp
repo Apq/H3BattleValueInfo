@@ -594,35 +594,11 @@ static unsigned int ComputeStackChecksum(_BattleMgr_* mgr)
     return hash;
 }
 
-static _Pcx8_* LoadPanelImageAsPcx8()
+// 加载原版 DlgBluBk.PCX 作为面板背景。
+// 使用 o_LoadPcx8 确保返回的 _Pcx8_ 是完整游戏资源对象，兼容 HD_TC2。
+static _Pcx8_* LoadPanelImageAsGamePcx8()
 {
-    if (!cfg.ranged_panel_image[0]) return nullptr;
-
-    char modulePath[MAX_PATH];
-    GetModuleFileNameA(g_hModule, modulePath, MAX_PATH);
-    char* slash = strrchr(modulePath, '\\');
-    if (slash) slash[1] = 0; else modulePath[0] = 0;
-
-    char path[2048];
-    _snprintf(path, sizeof(path) - 1, "%simg\\%s", modulePath, cfg.ranged_panel_image);
-    path[sizeof(path) - 1] = 0;
-
-    const char* ext = strrchr(cfg.ranged_panel_image, '.');
-    bool isPcx = ext && _stricmp(ext, ".pcx") == 0;
-    if (isPcx) {
-        _Pcx8_* indexed = DecodePcx8File(path);
-        if (indexed) return indexed;
-    }
-
-    int w = 0, h = 0;
-    unsigned char* rgb = DecodeImageFile(path, cfg.ranged_panel_image, &w, &h);
-    if (!rgb) return nullptr;
-
-    _Pcx8_* palSrc = o_LoadPcx8((char*)"DlgBluBk.PCX");
-    _Pcx8_* pcx8 = palSrc ? QuantizeRgbAsPcx8(rgb, w, h, palSrc, "bv_panel") : nullptr;
-    if (palSrc) palSrc->DerefOrDestruct();
-    free(rgb);
-    return pcx8;
+    return o_LoadPcx8((char*)"DlgBluBk.PCX");
 }
 
 class RangedOverlayPanel
@@ -717,13 +693,18 @@ public:
         if (bg_) {
             int bw = bg_->width;
             int bh = bg_->height;
-            int draw_w = (bw < panel_w) ? bw : panel_w;
-            int draw_h = (bh < panel_h) ? bh : panel_h;
             last_x_ = x;
             last_y_ = y;
-            last_w_ = draw_w;
-            last_h_ = draw_h;
-            bg_->DrawToPcx16(0, 0, draw_w, draw_h, screen, x, y, FALSE);
+            last_w_ = panel_w;
+            last_h_ = panel_h;
+            // 平铺 DlgBluBk.PCX 填充整个面板区域，使用游戏原函数 0x44FA80（兼容 HD_TC2）。
+            for (int ty = 0; ty < panel_h; ty += bh) {
+                for (int tx = 0; tx < panel_w; tx += bw) {
+                    int sw = (panel_w - tx < bw) ? (panel_w - tx) : bw;
+                    int sh = (panel_h - ty < bh) ? (panel_h - ty) : bh;
+                    bg_->DrawToPcx16(0, 0, sw, sh, screen, x + tx, y + ty, FALSE);
+                }
+            }
         }
 
         // 正常帧只画缓存文本；dirty 或空缓存时才重算。
@@ -774,12 +755,13 @@ private:
 
     void EnsureBackground()
     {
-        if (!bg_) bg_ = LoadPanelImageAsPcx8();
+        if (!bg_) bg_ = LoadPanelImageAsGamePcx8();
     }
 
     void ReleaseBackground()
     {
-        if (bg_) { bg_->DerefOrDestruct(); bg_ = nullptr; }
+        // o_LoadPcx8 返回的游戏资源由游戏管理，不需要我们释放。
+        bg_ = nullptr;
     }
 
     void Recalculate(_BattleMgr_* mgr, const char* reason)
