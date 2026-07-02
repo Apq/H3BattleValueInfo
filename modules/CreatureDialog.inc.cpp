@@ -138,6 +138,8 @@ static bool IsMegaDescLoaded()
 
 static void TryAddFightValueLine(_Dlg_* dlg)
 {
+    // 临时禁用：插入控件导致对话框关闭时控件链表损坏崩溃
+    return;
     if (!IsMegaDescLoaded()) return;
     if (!dlg || dlg->width != 298 || !FindDlgItem(dlg, 200)) return;
 
@@ -270,7 +272,7 @@ static int CalcHeroSpellPower(_BattleMgr_* mgr, int side)
     if (!mgr || side < 0 || side > 1) return 0;
 
     _Hero_* hero = mgr->hero[side];
-    if (!hero) return 0;
+    if (!hero || (uint32_t)hero < 0x00400000 || (uint32_t)hero > 0x20000000) return 0;
 
     // 只要求英雄有魔法书；不检查当前魔法值，也不检查本回合是否已经施法。
     if (hero->doll_art[AS_SPELL_BOOK].id == -1) return 0;
@@ -870,11 +872,17 @@ public:
 
     void Draw(_BattleMgr_* mgr)
     {
-        if (!mgr || !mgr->dlg) return;
+        // Get dlg: try combatManager::mainWindow, fallback to gpWindowManager::activeWindow
+        _Dlg_* dlg = (mgr && mgr->dlg && (uint32_t)mgr->dlg > 0x10000) ? mgr->dlg : nullptr;
+        if (!dlg) {
+            char* wndMgr = (char*)*(uint32_t*)0x6992D0;
+            if (wndMgr) {
+                uint32_t aw = *(uint32_t*)(wndMgr + 0x50);
+                if (aw >= 0x01000000 && aw <= 0x20000000) dlg = (_Dlg_*)aw;
+            }
+        }
         _Pcx16_* screen = o_WndMgr ? o_WndMgr->screen_pcx16 : nullptr;
-        if (!screen) return;
-
-        _Dlg_* dlg = mgr->dlg;
+        if (!screen || !dlg) return;
 
         if (diag_draw_count_ < 20) {
             ++diag_draw_count_;
@@ -905,27 +913,25 @@ public:
 
         if (!active_) return;
         if (suppressed_for_result_) return;
-        if (IsBattleEnded(mgr)) {
-            Destroy();
-            return;
-        }
+        // NOTE: IsBattleEnded disabled in HD Mod - mgr struct layout unreliable.
+        // if (IsBattleEnded(mgr)) { Destroy(); return; }
 
         if (!battle_area_logged_) {
             battle_area_logged_ = true;
-            WriteLog("[RangedOverlayPanel] screen=%dx%d dlg=(%d,%d,%d,%d)",
-                screen->width, screen->height,
-                dlg->x, dlg->y, dlg->width, dlg->height);
+            WriteLog("[RangedOverlayPanel] screen=%dx%d dlg=%p rect=(%d,%d,%d,%d)",
+                screen->width, screen->height, dlg, dlg->x, dlg->y, dlg->width, dlg->height);
         }
 
         int panel_w = cfg.ranged_panel_width;
         int panel_h = cfg.ranged_panel_height;
         int text_h = 17;
 
-        // 独立 overlay panel 的屏幕坐标：位置保持旧逻辑，水平居中于战斗窗口，吸附到外侧上方。
-        int x = dlg->x + (dlg->width - panel_w) / 2;
+        // 独立 overlay panel 的屏幕坐标：在实际渲染表面上水平居中。
+        // HD Mod 下 screen_pcx16 是实际分辨率（如 1712x900），
+        // 而 dlg->rect 仍是 800x600 的逻辑坐标，不能用于居中。
+        int x = (screen->width - panel_w) / 2;
         if (x < 0) x = 0;
-        int y = dlg->y - panel_h - cfg.ranged_panel_y;
-        if (y < 0) y = 0;
+        int y = 2;  // 吸附到屏幕顶部
 
         int pad_x = 16;
         int mid_gap = 16;
@@ -947,8 +953,19 @@ public:
         }
 
         // 正常帧只画缓存文本；dirty 或空缓存时才重算。
+        // TODO: mgr struct layout unreliable in HD Mod - Recalculate disabled.
         if (dirty_ || !text_[0][0]) {
-            Recalculate(mgr, dirty_ ? "dirty" : "empty cache");
+            // Recalculate(mgr, dirty_ ? "dirty" : "empty cache");
+            // Use placeholder text to verify panel rendering
+            if (!text_[0][0]) {
+                strcpy(text_[0], "L: ---");
+                strcpy(text_[1], "R: ---");
+                strcpy(text_[2], "");
+                strcpy(text_[3], "");
+                strcpy(text_[4], "");
+                strcpy(text_[5], "");
+            }
+            dirty_ = false;
         }
 
         _Fnt_* font = GetRangedPanelTextFont();
@@ -1081,9 +1098,63 @@ static void UpdateRangedPanel(_BattleMgr_* mgr)
 }
 
 
-int __stdcall Hook_BattleRedraw(HiHook* h, _BattleMgr_* mgr, _bool8_ flip, _bool8_ set_battle_redraws, _bool8_ use_battle_redraws, int waiting_time, _bool8_ redraw_background, _bool8_ wait)
+int __stdcall Hook_BattleRedraw(HiHook* h, _BattleMgr_* hook_mgr, _bool8_ flip, _bool8_ set_battle_redraws, _bool8_ use_battle_redraws, int waiting_time, _bool8_ redraw_background, _bool8_ wait)
 {
-    THISCALL_7(void, h->GetDefaultFunc(), mgr, flip, set_battle_redraws, use_battle_redraws, waiting_time, redraw_background, wait);
+    // hook_mgr IS the combatManager (vtable 0x63D3E8 confirms).
+    // mainWindow at +0x132FC may be 0x0E (uninitialized in HD Mod hook chain).
+    _BattleMgr_* mgr = hook_mgr;
+    static int s_call_count = 0;
+    static int s_valid_dlg_count = 0;
+    ++s_call_count;
+    _Dlg_* cur_dlg = nullptr;
+    // Try combatManager::mainWindow first
+    if (mgr && (uint32_t)mgr->dlg > 0x10000) cur_dlg = mgr->dlg;
+    // Fallback: gpWindowManager->activeWindow (+0x50)
+    if (!cur_dlg) {
+        char* wndMgr = (char*)*(uint32_t*)0x6992D0;
+        if (wndMgr) {
+            uint32_t aw = *(uint32_t*)(wndMgr + 0x50);
+            if (aw >= 0x01000000 && aw <= 0x20000000) cur_dlg = (_Dlg_*)aw;
+        }
+    }
+    if (cur_dlg) {
+        ++s_valid_dlg_count;
+        if (s_valid_dlg_count <= 5) {
+            WriteLog("[Diag] Hook_BattleRedraw call#%d valid#%d mgr=%p dlg=%p", s_call_count, s_valid_dlg_count, mgr, cur_dlg);
+        }
+    } else if (s_call_count <= 3 || (s_call_count % 500) == 0) {
+        WriteLog("[Diag] Hook_BattleRedraw call#%d mgr=%p dlg=0x%X", s_call_count, mgr, mgr ? (uint32_t)mgr->dlg : 0);
+        // Scan wrapper for heroWindow candidates
+        if (mgr && (s_call_count == 1 || s_call_count == 100)) {
+            WriteLog("[Diag] Pointer dump #%d of mgr=%p...", s_call_count, mgr);
+            uint32_t dlg_val = *(uint32_t*)((char*)mgr + 0x132FC);
+            WriteLog("[Diag]   mgr+0x132FC (mainWindow) = 0x%08X", dlg_val);
+            for (int off = 0; off < 0x140F0; off += 4) {
+                uint32_t v = *(uint32_t*)((char*)mgr + off);
+                if (v >= 0x01000000 && v <= 0x20000000) {
+                    // Check if readable and get rect info
+                    const char* note = "";
+                    if (!IsBadReadPtr((void*)(v + 0x28), 4)) {
+                        int32_t dx = *(int32_t*)((char*)v + 0x18);
+                        int32_t dy = *(int32_t*)((char*)v + 0x1C);
+                        int32_t dw = *(int32_t*)((char*)v + 0x20);
+                        int32_t dh = *(int32_t*)((char*)v + 0x24);
+                        if (dx >= 0 && dx < 4000 && dy >= 0 && dy < 4000 && dw > 50 && dw < 4000 && dh > 50 && dh < 4000) {
+                            WriteLog("[Diag]   mgr+0x%X = 0x%08X rect=(%d,%d,%d,%d) ***WINDOW***", off, v, dx, dy, dw, dh);
+                        }
+                    }
+                }
+            }
+            // Also specifically log +0x132FC
+            uint32_t mw_val = *(uint32_t*)((char*)mgr + 0x132FC);
+            WriteLog("[Diag]   mgr+0x132FC (mainWindow) = 0x%08X", mw_val);
+            // And +0x38 (seen as 0x1EC20398 earlier)
+            uint32_t v38 = *(uint32_t*)((char*)mgr + 0x38);
+            WriteLog("[Diag]   mgr+0x38 = 0x%08X", v38);
+            WriteLog("[Diag] scan complete");
+        }
+    }
+    THISCALL_7(void, h->GetDefaultFunc(), hook_mgr, flip, set_battle_redraws, use_battle_redraws, waiting_time, redraw_background, wait);
     UpdateRangedPanel(mgr);
     return 0;
 }
