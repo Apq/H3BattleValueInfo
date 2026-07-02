@@ -36,6 +36,7 @@ static void WriteWideFileUtf8BomIfEmpty(HANDLE h)
 
 static void AppendUtf8LogLine(const char* text)
 {
+    if (g_disable_log) return;
     if (!g_log_path_w[0]) return;
     HANDLE h = CreateFileW(g_log_path_w, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE) return;
@@ -48,6 +49,7 @@ static void AppendUtf8LogLine(const char* text)
 
 static void WriteLog(const char* fmt, ...)
 {
+    if (g_disable_log) return;
     char line[1024];
     SYSTEMTIME st;
     GetLocalTime(&st);
@@ -152,19 +154,16 @@ static void TryAddFightValueLine(_Dlg_* dlg)
 // BUILD 阶段 hook：窗口构建完成后插入战斗价值行。
 int __stdcall Hook_BuildCombat(LoHook* h, HookContext* c)
 {
-    DoLogCleanupOnce();
     TryAddFightValueLine((_Dlg_*)c->ebx);
     return EXEC_DEFAULT;
 }
 int __stdcall Hook_BuildAdventure(LoHook* h, HookContext* c)
 {
-    DoLogCleanupOnce();
     TryAddFightValueLine((_Dlg_*)c->esi);
     return EXEC_DEFAULT;
 }
 int __stdcall Hook_BuildTown(LoHook* h, HookContext* c)
 {
-    DoLogCleanupOnce();
     TryAddFightValueLine((_Dlg_*)c->esi);
     return EXEC_DEFAULT;
 }
