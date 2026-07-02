@@ -178,13 +178,13 @@ int __stdcall Hook_DlgDefProc(HiHook* h, _Dlg_* dlg, _EventMsg_* msg)
             s_diag_dlgdefproc_count, dlg,
             dlg ? dlg->x : -1, dlg ? dlg->y : -1, dlg ? dlg->width : -1, dlg ? dlg->height : -1,
             o_CurrentDlg, o_BattleMgr ? o_BattleMgr->dlg : nullptr,
-            msg ? msg->type : -1, msg ? msg->subtype : -1, msg ? msg->item_id : -1);
+            msg ? msg->command : -1, msg ? msg->subtype : -1, msg ? msg->itemId : -1);
     }
     if (o_BattleMgr && o_BattleMgr->dlg && dlg && dlg != o_BattleMgr->dlg) {
         WriteLog("[Diag] non-battle dlg while battle active: dlg=%p battleDlg=%p", dlg, o_BattleMgr->dlg);
     }
     TryAddFightValueLine(dlg);
-    return CALL_2(int, __thiscall, h->GetDefaultFunc(), dlg, msg);
+    return THISCALL_2(int, h->GetDefaultFunc(), dlg, msg);
 }
 
 // ========== 战场顶部远程输出面板 ==========
@@ -205,7 +205,7 @@ static int CalcRangedOutputToTarget(_BattleMgr_* mgr, int side, _BattleStack_* t
         // 原版基础伤害：_BattleStack_::CalcBaseDamage(0) @ 0x442E80。
         // 原版射击流程也是先调用 0x442E80，再把结果传给 Calc_Damage_Bonuses(0x443C60)。
         // 这里不再手写平均伤害，以便祝福、诅咒、蛊惑/多头等基础伤害相关状态走原版逻辑。
-        int base_damage = CALL_2(int, __thiscall, 0x442E80, shooter, 0);
+        int base_damage = THISCALL_2(int, 0x442E80, shooter, 0);
         if (base_damage <= 0) continue;
 
         int fireshield_damage = 0;
@@ -243,7 +243,7 @@ static int GetHeroEffectiveSpellLevel(_Hero_* hero, int spell_id)
     // this=hero, arg1=spell_id, arg2=land_modifier。
     // 会综合英雄气/水/火/土魔法等级、魔法地形、飞行术等特殊规则。
     int land_modifier = hero->GetLandModifierUnder();
-    int level = CALL_3(int, __thiscall, 0x4E52F0, hero, spell_id, land_modifier);
+    int level = THISCALL_3(int, 0x4E52F0, hero, spell_id, land_modifier);
     if (level < 0) level = 0;
     if (level > 3) level = 3;
     return level;
@@ -501,23 +501,23 @@ static _Pcx8_* DecodePcx8File(const char* path)
         }
     }
 
-    _Pcx8_* pcx8 = _Pcx8_::CreateNew((char*)"bv_panel", w, h);
+    _Pcx8_* pcx8 = H3LoadedPcx::Create("bv_panel", w, h);
     if (!pcx8) { free(raw); free(data); return nullptr; }
 
     for (int y = 0; y < h; y++)
-        memcpy((unsigned char*)pcx8->buffer + y * pcx8->scanline_size, raw + y * bpl, w);
+        memcpy((unsigned char*)pcx8->buffer + y * pcx8->scanlineSize, raw + y * bpl, w);
 
     // 设置 palette24
     for (int i = 0; i < 256; i++) {
-        pcx8->palette24.colors[i].r = pal[i * 3];
-        pcx8->palette24.colors[i].g = pal[i * 3 + 1];
-        pcx8->palette24.colors[i].b = pal[i * 3 + 2];
+        pcx8->palette888[i].r = pal[i * 3];
+        pcx8->palette888[i].g = pal[i * 3 + 1];
+        pcx8->palette888[i].b = pal[i * 3 + 2];
     }
     // 设置 palette16 (RGB565)
     for (int i = 0; i < 256; i++)
-        pcx8->palette16.colors[i] = RGB565_fromR8G8B8(pal[i * 3], pal[i * 3 + 1], pal[i * 3 + 2]);
+        pcx8->palette565[i] = RGB565_fromR8G8B8(pal[i * 3], pal[i * 3 + 1], pal[i * 3 + 2]);
 
-    pcx8->ref_count = 0x10000;
+    pcx8->IncreaseReferences();
     free(raw);
     free(data);
     return pcx8;
@@ -645,9 +645,9 @@ static unsigned char* DecodeImageFile(const char* path, const char* filename, in
 static _Pcx8_* QuantizeRgbAsPcx8(unsigned char* rgb, int w, int h, _Pcx8_* palSrc, const char* resName)
 {
     if (!rgb || !palSrc || w <= 0 || h <= 0) return nullptr;
-    _Pcx8_* pcx8 = _Pcx8_::CreateNew((char*)resName, w, h);
+    _Pcx8_* pcx8 = H3LoadedPcx::Create(resName, w, h);
     if (!pcx8) return nullptr;
-    pcx8->SetPaletteFrom(palSrc);
+    memcpy(&pcx8->palette888, &palSrc->palette888, sizeof(pcx8->palette888)); pcx8->palette565.InitiateFromPalette888(pcx8->palette888);
 
     unsigned char* dst = (unsigned char*)pcx8->buffer;
     for (int y = 0; y < h; y++) {
@@ -656,16 +656,16 @@ static _Pcx8_* QuantizeRgbAsPcx8(unsigned char* rgb, int w, int h, _Pcx8_* palSr
             int best = 0;
             int bestD = 0x7FFFFFFF;
             for (int i = 1; i < 256; i++) {
-                int dr = (int)p[0] - (int)palSrc->palette24.colors[i].r;
-                int dg = (int)p[1] - (int)palSrc->palette24.colors[i].g;
-                int db = (int)p[2] - (int)palSrc->palette24.colors[i].b;
+                int dr = (int)p[0] - (int)palSrc->palette888[i].r;
+                int dg = (int)p[1] - (int)palSrc->palette888[i].g;
+                int db = (int)p[2] - (int)palSrc->palette888[i].b;
                 int d = dr * dr + dg * dg + db * db;
                 if (d < bestD) { bestD = d; best = i; if (d == 0) break; }
             }
-            dst[y * pcx8->scanline_size + x] = (unsigned char)best;
+            dst[y * pcx8->scanlineSize + x] = (unsigned char)best;
         }
     }
-    pcx8->ref_count = 0x10000;
+    pcx8->IncreaseReferences();
     return pcx8;
 }
 
@@ -956,8 +956,8 @@ public:
         if (font) {
             for (int row = 0; row < 3; ++row) {
                 int yy = y + cfg.row_y[row];
-                font->DrawTextToPcx16(text_[row * 2], screen, left_x, yy, col_w, text_h, (_byte_)cfg.ranged_panel_text_color, 2, 0);
-                font->DrawTextToPcx16(text_[row * 2 + 1], screen, right_x, yy, col_w, text_h, (_byte_)cfg.ranged_panel_text_color, 0, 0);
+                font->TextDraw(screen, text_[row * 2], left_x, yy, col_w, text_h, (eTextColor)cfg.ranged_panel_text_color, (eTextAlignment)2);
+                font->TextDraw(screen, text_[row * 2 + 1], right_x, yy, col_w, text_h, (eTextColor)cfg.ranged_panel_text_color, (eTextAlignment)0);
             }
         }
     }
@@ -1062,13 +1062,13 @@ static void DestroyRangedPanel()
 static _Fnt_* GetRangedPanelTextFont()
 {
     const char* name = cfg.ranged_panel_text_font;
-    if (!name || !name[0]) return o_Smalfont_Fnt;
-    if (_stricmp(name, "tiny.fnt") == 0 || _stricmp(name, "tiny") == 0) return o_Tiny_Fnt;
-    if (_stricmp(name, "smalfont.fnt") == 0 || _stricmp(name, "smalfont") == 0) return o_Smalfont_Fnt;
-    if (_stricmp(name, "medfont.fnt") == 0 || _stricmp(name, "medfont") == 0) return o_Medfont_Fnt;
-    if (_stricmp(name, "bigfont.fnt") == 0 || _stricmp(name, "bigfont") == 0) return o_Bigfont_Fnt;
-    if (_stricmp(name, "calli10r.fnt") == 0 || _stricmp(name, "calli10r") == 0) return o_Calli10R_Fnt;
-    return o_Smalfont_Fnt;
+    if (!name || !name[0]) return H3Font::Load("smalfont.fnt");
+    if (_stricmp(name, "tiny.fnt") == 0 || _stricmp(name, "tiny") == 0) return H3Font::Load("tiny.fnt");
+    if (_stricmp(name, "smalfont.fnt") == 0 || _stricmp(name, "smalfont") == 0) return H3Font::Load("smalfont.fnt");
+    if (_stricmp(name, "medfont.fnt") == 0 || _stricmp(name, "medfont") == 0) return H3Font::Load("medfont.fnt");
+    if (_stricmp(name, "bigfont.fnt") == 0 || _stricmp(name, "bigfont") == 0) return H3Font::Load("bigfont.fnt");
+    if (_stricmp(name, "calli10r.fnt") == 0 || _stricmp(name, "calli10r") == 0) return H3Font::Load("calli10r.fnt");
+    return H3Font::Load("smalfont.fnt");
 }
 
 static void MarkRangedPanelDirty(const char* reason)
@@ -1084,7 +1084,7 @@ static void UpdateRangedPanel(_BattleMgr_* mgr)
 
 int __stdcall Hook_BattleRedraw(HiHook* h, _BattleMgr_* mgr, _bool8_ flip, _bool8_ set_battle_redraws, _bool8_ use_battle_redraws, int waiting_time, _bool8_ redraw_background, _bool8_ wait)
 {
-    CALL_7(void, __thiscall, h->GetDefaultFunc(), mgr, flip, set_battle_redraws, use_battle_redraws, waiting_time, redraw_background, wait);
+    THISCALL_7(void, h->GetDefaultFunc(), mgr, flip, set_battle_redraws, use_battle_redraws, waiting_time, redraw_background, wait);
     UpdateRangedPanel(mgr);
     return 0;
 }
@@ -1092,7 +1092,7 @@ int __stdcall Hook_BattleRedraw(HiHook* h, _BattleMgr_* mgr, _bool8_ flip, _bool
 // Combat_StartBattle @ 0x4781C0：进入战斗时先置脏，首次绘制计算。
 int __stdcall Hook_CombatStartBattle(HiHook* h, _BattleMgr_* mgr)
 {
-    int result = CALL_1(int, __thiscall, h->GetDefaultFunc(), mgr);
+    int result = THISCALL_1(int, h->GetDefaultFunc(), mgr);
     MarkRangedPanelDirty("combat start");
     return result;
 }
@@ -1100,7 +1100,7 @@ int __stdcall Hook_CombatStartBattle(HiHook* h, _BattleMgr_* mgr)
 // MagicSystem_2 @ 0x464F10：战斗内施法流程。原函数返回后置脏，下一次绘制刷新。
 int __stdcall Hook_CombatCastSpell(HiHook* h, _BattleMgr_* mgr, int x, int y)
 {
-    CALL_3(void, __thiscall, h->GetDefaultFunc(), mgr, x, y);
+    THISCALL_3(void, h->GetDefaultFunc(), mgr, x, y);
     MarkRangedPanelDirty("spell cast");
     return 0;
 }
@@ -1109,7 +1109,9 @@ int __stdcall Hook_CombatCastSpell(HiHook* h, _BattleMgr_* mgr, int x, int y)
 // 返回后置脏；绘制时只在 dirty=true 时重算，不会每帧完整重算。
 int __stdcall Hook_CombatActionHandler(HiHook* h, _BattleMgr_* mgr, int msg)
 {
-    int result = CALL_2(int, __thiscall, h->GetDefaultFunc(), mgr, msg);
+    int result = THISCALL_2(int, h->GetDefaultFunc(), mgr, msg);
     MarkRangedPanelDirty("stack action");
     return result;
 }
+
+
