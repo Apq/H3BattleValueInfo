@@ -22,6 +22,7 @@ static unsigned int ComputeStackChecksum(_BattleMgr_* mgr);
 
 static const int RP_ID_BG = 32000;
 static const int RP_ID_TEXT0 = 32001;
+static const int RP_BASE_Y_OFFSET = 23;
 
 static void WriteWideFileUtf8BomIfEmpty(HANDLE h)
 {
@@ -926,12 +927,23 @@ public:
         int panel_h = cfg.ranged_panel_height;
         int text_h = 17;
 
-        // 独立 overlay panel 的屏幕坐标：在实际渲染表面上水平居中。
         // HD Mod 下 screen_pcx16 是实际分辨率（如 1712x900），
-        // 而 dlg->rect 仍是 800x600 的逻辑坐标，不能用于居中。
-        int x = (screen->width - panel_w) / 2;
+        // 而 dlg->rect 仍是 800x600 的逻辑坐标。战斗画布在实际屏幕中居中，
+        // 面板应吸附在这个战斗画布外侧上方，而不是屏幕顶部。
+        int battle_x = (screen->width - 800) / 2;
+        int battle_y = (screen->height - 600) / 2;
+        if (battle_x < 0) battle_x = 0;
+        if (battle_y < 0) battle_y = 0;
+
+        int x = battle_x + (800 - panel_w) / 2;
         if (x < 0) x = 0;
-        int y = 2;  // 吸附到屏幕顶部
+        int y = battle_y - panel_h - RP_BASE_Y_OFFSET - cfg.ranged_panel_y;
+        if (y < 0) y = 0;
+
+        if (diag_draw_count_ == 1) {
+            WriteLog("[RangedOverlayPanel] battleCanvas=(%d,%d,800,600) panel=(%d,%d,%d,%d) baseY=%d cfgY=%d",
+                battle_x, battle_y, x, y, panel_w, panel_h, RP_BASE_Y_OFFSET, cfg.ranged_panel_y);
+        }
 
         int pad_x = 16;
         int mid_gap = 16;
