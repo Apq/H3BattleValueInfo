@@ -11,12 +11,11 @@ static void StartPlugin()
     // 战场顶部常驻远程输出面板。
     _PI->WriteHiHook(0x493FC0, SPLICE_, EXTENDED_, THISCALL_, Hook_BattleRedraw);
 
-    // 远程/魔法输出重算事件：进入战斗、施法后、stack 行动后。
+    // 远程/魔法输出重算事件：进入战斗、施法后。
     _PI->WriteHiHook(0x4781C0, SPLICE_, EXTENDED_, THISCALL_, Hook_CombatStartBattle);
     _PI->WriteHiHook(0x464F10, SPLICE_, EXTENDED_, THISCALL_, Hook_CombatCastSpell);
-    _PI->WriteHiHook(0x4746B0, SPLICE_, EXTENDED_, THISCALL_, Hook_CombatActionHandler);
 
-    WriteLog("BattleValueInfo 已启用。Hook：FightValue(4), RangedPanel(1), RangedPanelEvents(3)。");
+    WriteLog("BattleValueInfo 已启用。Hook：FightValue(4), RangedPanel(1), RangedPanelEvents(2)。");
 }
 
 // ========== DllMain ==========
