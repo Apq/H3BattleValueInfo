@@ -16,6 +16,33 @@ static char* FindDlgItem(_Dlg_* dlg, short target_id)
     return nullptr;
 }
 
+static _Dlg_* GetActiveDlg()
+{
+    char* wndMgr = (char*)*(uint32_t*)0x6992D0;
+    if (!wndMgr) return nullptr;
+    uint32_t aw = *(uint32_t*)(wndMgr + 0x50);
+    if (aw >= 0x01000000 && aw <= 0x20000000) return (_Dlg_*)aw;
+    return nullptr;
+}
+
+static bool IsReplayableQuickBattleResultDlg(_Dlg_* dlg)
+{
+    // HD Mod Replayable Quick Battle adds the "cancel/replay" button with id 0x1FB.
+    return dlg && FindDlgItem(dlg, 0x1FB) != nullptr;
+}
+
+static bool IsBattleOverByEngine(_BattleMgr_* mgr)
+{
+    if (!mgr || IsBadReadPtr(mgr, sizeof(void*))) return true;
+    return THISCALL_1(_bool8_, 0x465410, mgr) != 0;
+}
+
+static bool IsHiddenBattleByEngine(_BattleMgr_* mgr)
+{
+    if (!mgr || IsBadReadPtr(mgr, sizeof(void*))) return true;
+    return THISCALL_1(_bool8_, 0x46A080, mgr) != 0;
+}
+
 static void DestroyRangedPanel();
 static _Fnt_* GetRangedPanelTextFont();
 static unsigned int ComputeStackChecksum(_BattleMgr_* mgr);
@@ -863,9 +890,24 @@ public:
         dirty_ = true;
     }
 
+    void BeginManualBattle(_BattleMgr_* mgr, const char* reason)
+    {
+        last_mgr_ = mgr;
+        active_ = true;
+        manual_battle_started_ = true;
+        suppressed_for_result_ = false;
+        battle_area_logged_ = false;
+        stack_checksum_ = 0;
+        ResetText();
+        MarkDirty(reason);
+        WriteLog("[RangedOverlayPanel] armed reason=%s mgr=%p", reason ? reason : "unknown", mgr);
+    }
+
     void Destroy()
     {
         active_ = false;
+        manual_battle_started_ = false;
+        suppressed_for_result_ = false;
         ReleaseBackground();
         ResetText();
         if (o_BattleMgr) o_BattleMgr->RedrawBattlefield(FALSE, TRUE, FALSE, 0, TRUE, FALSE);
@@ -882,6 +924,7 @@ public:
                 if (aw >= 0x01000000 && aw <= 0x20000000) dlg = (_Dlg_*)aw;
             }
         }
+        _Dlg_* active_dlg = GetActiveDlg();
         _Pcx16_* screen = o_WndMgr ? o_WndMgr->screen_pcx16 : nullptr;
         if (!screen || !dlg) return;
 
@@ -894,7 +937,8 @@ public:
         // 新战斗管理器出现时，重置运行态并置脏：进入战斗后首次绘制计算一次。
         if (last_mgr_ != mgr) {
             last_mgr_ = mgr;
-            active_ = true;
+            active_ = false;
+            manual_battle_started_ = false;
             suppressed_for_result_ = false;
             stack_checksum_ = 0;
             ResetText();
@@ -904,7 +948,6 @@ public:
         // 新战斗窗口出现时，重新加载背景并置脏；位置仍按战斗 dlg 计算。
         if (last_dlg_ != dlg) {
             last_dlg_ = dlg;
-            active_ = true;
             s_battle_end_logged = false;
             stack_checksum_ = 0;
             ResetText();
@@ -912,6 +955,19 @@ public:
             MarkDirty("new battle dialog");
         }
 
+        if (IsReplayableQuickBattleResultDlg(active_dlg)) {
+            SuppressForResult("replayable quick battle result", mgr, active_dlg);
+            return;
+        }
+        if (IsBattleOverByEngine(mgr)) {
+            SuppressForResult("battle over", mgr, active_dlg);
+            return;
+        }
+        if (IsHiddenBattleByEngine(mgr)) {
+            SuppressForResult("hidden battle", mgr, active_dlg);
+            return;
+        }
+        if (!manual_battle_started_) return;
         if (!active_) return;
         if (suppressed_for_result_) return;
         // NOTE: IsBattleEnded disabled in HD Mod - mgr struct layout unreliable.
@@ -1002,7 +1058,8 @@ private:
         bg_ = nullptr;
         last_dlg_ = nullptr;
         last_mgr_ = nullptr;
-        active_ = true;
+        active_ = false;
+        manual_battle_started_ = false;
         suppressed_for_result_ = false;
         last_x_ = -1;
         last_y_ = -1;
@@ -1041,6 +1098,18 @@ private:
         bg_ = nullptr;
     }
 
+    void SuppressForResult(const char* reason, _BattleMgr_* mgr, _Dlg_* active_dlg)
+    {
+        if (!suppressed_for_result_ || active_) {
+            WriteLog("[RangedOverlayPanel] suppressed reason=%s mgr=%p battleDlg=%p activeDlg=%p",
+                reason ? reason : "unknown", mgr, last_dlg_, active_dlg);
+        }
+        active_ = false;
+        suppressed_for_result_ = true;
+        ReleaseBackground();
+        ResetText();
+    }
+
     void Recalculate(_BattleMgr_* mgr, const char* reason)
     {
         if (!mgr) return;
@@ -1068,6 +1137,7 @@ private:
     _Dlg_* last_dlg_;
     _BattleMgr_* last_mgr_;
     bool active_;
+    bool manual_battle_started_;
     bool suppressed_for_result_;
     int last_x_;
     int last_y_;
@@ -1102,6 +1172,11 @@ static _Fnt_* GetRangedPanelTextFont()
 static void MarkRangedPanelDirty(const char* reason)
 {
     s_ranged_overlay_panel.MarkDirty(reason);
+}
+
+static void BeginRangedPanelManualBattle(_BattleMgr_* mgr, const char* reason)
+{
+    s_ranged_overlay_panel.BeginManualBattle(mgr, reason);
 }
 
 static void UpdateRangedPanel(_BattleMgr_* mgr)
@@ -1175,7 +1250,7 @@ int __stdcall Hook_BattleRedraw(HiHook* h, _BattleMgr_* hook_mgr, _bool8_ flip, 
 int __stdcall Hook_CombatStartBattle(HiHook* h, _BattleMgr_* mgr)
 {
     int result = THISCALL_1(int, h->GetDefaultFunc(), mgr);
-    MarkRangedPanelDirty("combat start");
+    BeginRangedPanelManualBattle(mgr, "combat start");
     return result;
 }
 
