@@ -1056,6 +1056,8 @@ public:
             MarkDirty("new battle dialog");
         }
 
+        if (suppressing_) return; // 重入保护：suppress触发的重绘不再检测
+
         if (IsReplayableQuickBattleResultDlg(active_dlg)) {
             SuppressForResult("replayable quick battle result", mgr, active_dlg);
             return;
@@ -1068,19 +1070,9 @@ public:
             SuppressForResult("hidden battle", mgr, active_dlg);
             return;
         }
-        // 任何弹出对话框覆盖战场时，不画面板（避免残留）
-        if (active_dlg != nullptr && active_dlg != dlg) {
-            if (active_) {
-                active_ = false;
-                ReleaseBackground();
-            }
-            return;
-        }
         // 从对话框/结果界面返回：恢复面板（含第二次重打）
-        if (!active_ && manual_battle_started_ && (active_dlg == nullptr || active_dlg == dlg)) {
-            if (suppressed_for_result_) {
-                WriteLog("[RangedOverlayPanel] re-armed after result dismiss mgr=%p", mgr);
-            }
+        if (suppressed_for_result_ && manual_battle_started_ && active_dlg == nullptr) {
+            WriteLog("[RangedOverlayPanel] re-armed after result dismiss mgr=%p", mgr);
             active_ = true;
             suppressed_for_result_ = false;
             battle_area_logged_ = false;
@@ -1177,6 +1169,7 @@ private:
         battle_area_logged_ = false;
         diag_draw_count_ = 0;
         dirty_ = true;
+        suppressing_ = false;
         stack_checksum_ = 0;
         ResetText();
     }
@@ -1209,6 +1202,7 @@ private:
 
     void SuppressForResult(const char* reason, _BattleMgr_* mgr, _Dlg_* active_dlg)
     {
+        bool was_active = active_;
         if (!suppressed_for_result_ || active_) {
             WriteLog("[RangedOverlayPanel] suppressed reason=%s mgr=%p battleDlg=%p activeDlg=%p",
                 reason ? reason : "unknown", mgr, last_dlg_, active_dlg);
@@ -1217,12 +1211,12 @@ private:
         suppressed_for_result_ = true;
         ReleaseBackground();
         ResetText();
-    }
-
-    void ClearPanelArea()
-    {
-        // 已弃用：ColorFill会在结果界面背景上留下黑块
-        // 结果界面是全屏对话框，会自然覆盖面板残留
+        // suppress时触发一次战场重绘，让游戏重画战场背景（不含面板）
+        if (was_active && mgr && !suppressing_) {
+            suppressing_ = true;
+            THISCALL_7(void, 0x493FC0, mgr, FALSE, TRUE, FALSE, 0, TRUE, FALSE);
+            suppressing_ = false;
+        }
     }
 
     void Recalculate(_BattleMgr_* mgr, const char* reason)
@@ -1289,6 +1283,7 @@ private:
     bool battle_area_logged_;
     int diag_draw_count_;
     bool dirty_;
+    bool suppressing_;
     unsigned int stack_checksum_;
     char text_[6][64];
 };
