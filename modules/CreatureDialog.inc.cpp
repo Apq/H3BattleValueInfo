@@ -1205,14 +1205,30 @@ private:
             WriteLog("[RangedOverlayPanel] suppressed reason=%s mgr=%p battleDlg=%p activeDlg=%p",
                 reason ? reason : "unknown", mgr, last_dlg_, active_dlg);
         }
+        // 先清除面板区域像素
+        if (was_active && last_x_ >= 0 && last_w_ > 0 && last_h_ > 0) {
+            ClearPanelArea();
+        }
         active_ = false;
         suppressed_for_result_ = true;
         ReleaseBackground();
         ResetText();
-        // 若面板之前可见，请求战场重绘以擦除残留画面
-        if (was_active && mgr) {
-            mgr->RedrawBattlefield(FALSE, TRUE, FALSE, 0, TRUE, FALSE);
-        }
+        last_x_ = -1;
+        last_y_ = -1;
+        last_w_ = 0;
+        last_h_ = 0;
+    }
+
+    void ClearPanelArea()
+    {
+        // 用 DD backbuffer 的 Blt ColorFill 清除面板区域
+        if (!o_DDSurfaceBackBuffer) return;
+        DDBLTFX bltfx;
+        memset(&bltfx, 0, sizeof(bltfx));
+        bltfx.dwSize = sizeof(bltfx);
+        bltfx.dwFillColor = 0; // 黑色
+        RECT dst = { last_x_, last_y_, last_x_ + last_w_, last_y_ + last_h_ };
+        o_DDSurfaceBackBuffer->Blt(&dst, nullptr, nullptr, DDBLT_COLORFILL | DDBLT_WAIT, &bltfx);
     }
 
     void Recalculate(_BattleMgr_* mgr, const char* reason)
