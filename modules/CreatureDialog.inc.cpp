@@ -1068,6 +1068,18 @@ public:
             SuppressForResult("hidden battle", mgr, active_dlg);
             return;
         }
+
+        // 从结果界面返回手动战斗（第二次重打）：结果框消失后恢复面板
+        if (suppressed_for_result_ && manual_battle_started_ && active_dlg == nullptr) {
+            WriteLog("[RangedOverlayPanel] re-armed after result dismiss mgr=%p", mgr);
+            active_ = true;
+            suppressed_for_result_ = false;
+            battle_area_logged_ = false;
+            stack_checksum_ = 0;
+            ResetText();
+            MarkDirty("re-enter manual battle");
+        }
+
         if (!manual_battle_started_) return;
         if (!active_) return;
         if (suppressed_for_result_) return;
