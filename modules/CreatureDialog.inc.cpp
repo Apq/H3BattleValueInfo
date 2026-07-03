@@ -1200,6 +1200,7 @@ private:
 
     void SuppressForResult(const char* reason, _BattleMgr_* mgr, _Dlg_* active_dlg)
     {
+        bool was_active = active_;
         if (!suppressed_for_result_ || active_) {
             WriteLog("[RangedOverlayPanel] suppressed reason=%s mgr=%p battleDlg=%p activeDlg=%p",
                 reason ? reason : "unknown", mgr, last_dlg_, active_dlg);
@@ -1208,6 +1209,10 @@ private:
         suppressed_for_result_ = true;
         ReleaseBackground();
         ResetText();
+        // 若面板之前可见，请求战场重绘以擦除残留画面
+        if (was_active && mgr) {
+            mgr->RedrawBattlefield(FALSE, TRUE, FALSE, 0, TRUE, FALSE);
+        }
     }
 
     void Recalculate(_BattleMgr_* mgr, const char* reason)
