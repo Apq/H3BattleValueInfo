@@ -57,6 +57,7 @@ compile_commands.json
 *.log
 *.bak
 *.swp
+*.aps
 tmp_*
 *.vcxproj.user
 插件开发-*.json

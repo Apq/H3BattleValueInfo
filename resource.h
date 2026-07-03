@@ -2,6 +2,8 @@
 // Microsoft Visual C++ generated include file.
 // Used by BattleValueInfo.rc
 //
+#include <winres.h>
+
 #define IDR_VERSIONINFO                 1
 
 // Next default values for new objects
