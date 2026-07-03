@@ -941,6 +941,8 @@ public:
             MarkDirty("new battle dialog");
         }
 
+        if (!manual_battle_started_) return;
+
         if (IsReplayableQuickBattleResultDlg(active_dlg)) {
             SuppressForResult("replayable quick battle result", mgr, active_dlg);
             return;
@@ -962,7 +964,6 @@ public:
             MarkDirty("re-enter manual battle");
         }
 
-        if (!manual_battle_started_) return;
         if (!active_) return;
         if (suppressed_for_result_) return;
 
