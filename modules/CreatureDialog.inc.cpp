@@ -218,29 +218,103 @@ int __stdcall Hook_DlgDefProc(HiHook* h, _Dlg_* dlg, _EventMsg_* msg)
 
 // ========== 战场顶部远程输出面板 ==========
 
+static int SafeCalcBaseDamage(_BattleStack_* shooter)
+{
+    __try {
+        return THISCALL_2(int, 0x442E80, shooter, 0);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+static int SafeCanShoot(_BattleStack_* shooter, _BattleStack_* target)
+{
+    __try {
+        return THISCALL_2(bool, 0x442610, shooter, target);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+static int SafeCalcDamageBonuses(_BattleStack_* shooter, _BattleStack_* target, int base_damage, int* fireshield)
+{
+    __try {
+        return THISCALL_7(int, 0x443C60, shooter, target, base_damage, TRUE, TRUE, 0, fireshield);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+static bool SafeDoesWearArtifact(_Hero_* hero, int art_id)
+{
+    __try {
+        return THISCALL_2(bool, 0x4E2C90, hero, art_id);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+static int SafeGetEffectiveSpellLevel(_Hero_* hero, int spell_id, int land_mod)
+{
+    __try {
+        return THISCALL_3(int, 0x4E52F0, hero, spell_id, land_mod);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+static int SafeGetSpellSpecBonus(_Hero_* hero, int spell_id, int damage)
+{
+    __try {
+        return THISCALL_4(int, 0x4E6260, hero, spell_id, 1, damage);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+static int SafeGetLandModifier(_Hero_* hero)
+{
+    __try {
+        return THISCALL_1(int, 0x4E5210, hero);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+static int SafeCalcRangedUnitsPower(_BattleMgr_* mgr, int side);
+static int SafeCalcHeroSpellPower(_BattleMgr_* mgr, int side);
+
 static int CalcRangedOutputToTarget(_BattleMgr_* mgr, int side, _BattleStack_* target)
 {
     if (!mgr || side < 0 || side > 1 || !target || target->count_current <= 0) return 0;
+
+    static bool s_ranged_detail = true; // 首次自动开启，后续关闭
 
     __int64 output = 0;
     for (int slot = 0; slot < 21; ++slot) {
         _BattleStack_* shooter = &mgr->stack[side][slot];
         if (shooter->count_current <= 0 || shooter->creature.shots <= 0) continue;
 
-        // 交给原版 CanShoot 判断贴脸、障碍、城墙、弹药、幻影神弓/金弓等射击可行性。
-        // 如果不能射击该目标，则这个 shooter 对该目标的远程输出按 0 计。
-        if (!shooter->CanShoot(target)) continue;
+        bool can_shoot = SafeCanShoot(shooter, target);
+        int base_damage = can_shoot ? SafeCalcBaseDamage(shooter) : 0;
 
-        // 原版基础伤害：_BattleStack_::CalcBaseDamage(0) @ 0x442E80。
-        // 原版射击流程也是先调用 0x442E80，再把结果传给 Calc_Damage_Bonuses(0x443C60)。
-        // 这里不再手写平均伤害，以便祝福、诅咒、蛊惑/多头等基础伤害相关状态走原版逻辑。
-        int base_damage = THISCALL_2(int, 0x442E80, shooter, 0);
+        if (s_ranged_detail) {
+            WriteLog("[RangedCalc] side=%d slot=%d cr=%d count=%d shots=%d canShoot=%d baseDmg=%d target_cr=%d",
+                side, slot, shooter->creature_id, shooter->count_current, shooter->creature.shots,
+                can_shoot ? 1 : 0, base_damage, target->creature_id);
+        }
+
+        if (!can_shoot) continue;
         if (base_damage <= 0) continue;
 
         int fireshield_damage = 0;
-        int damage = shooter->Calc_Damage_Bonuses(target, base_damage, TRUE, TRUE, 0, &fireshield_damage);
+        int damage = SafeCalcDamageBonuses(shooter, target, base_damage, &fireshield_damage);
+        if (s_ranged_detail && damage > 0) {
+            WriteLog("[RangedCalc] -> damage=%d fireshield=%d", damage, fireshield_damage);
+        }
         if (damage > 0) output += damage;
     }
+    s_ranged_detail = false; // 只诊断首次
     if (output > 0x7FFFFFFF) return 0x7FFFFFFF;
     return (int)output;
 }
@@ -261,7 +335,18 @@ static int CalcRangedUnitsPower(_BattleMgr_* mgr, int side)
         int output = CalcRangedOutputToTarget(mgr, side, target);
         if (output < min_output) min_output = output;
     }
+
     return has_target ? min_output : 0;
+}
+
+static int SafeCalcRangedUnitsPower(_BattleMgr_* mgr, int side)
+{
+    __try {
+        return CalcRangedUnitsPower(mgr, side);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        WriteLog("[RangedOverlayPanel] SEH exception during ranged calc side=%d mgr=%p", side, mgr);
+        return 0;
+    }
 }
 
 static int GetHeroEffectiveSpellLevel(_Hero_* hero, int spell_id)
@@ -271,8 +356,8 @@ static int GetHeroEffectiveSpellLevel(_Hero_* hero, int spell_id)
     // 原版：_Hero_::GetEffectiveSpellLevel @ 0x4E52F0。
     // this=hero, arg1=spell_id, arg2=land_modifier。
     // 会综合英雄气/水/火/土魔法等级、魔法地形、飞行术等特殊规则。
-    int land_modifier = hero->GetLandModifierUnder();
-    int level = THISCALL_3(int, 0x4E52F0, hero, spell_id, land_modifier);
+    int land_modifier = SafeGetLandModifier(hero);
+    int level = SafeGetEffectiveSpellLevel(hero, spell_id, land_modifier);
     if (level < 0) level = 0;
     if (level > 3) level = 3;
     return level;
@@ -286,10 +371,10 @@ static int ApplySpellDamageArtifactBonuses(_Hero_* hero, int spell_id, int damag
     // 这里按 o_Spell.school_flags 判断法术学派；多学派法术只加成一次。
     const unsigned school = o_Spell[spell_id].school_flags;
     bool boosted = false;
-    if ((school & SSF_AIR) && hero->DoesWearArtifact(AID_ORB_OF_THE_FIRMAMENT)) boosted = true;
-    if ((school & SSF_EARTH) && hero->DoesWearArtifact(AID_ORB_OF_SILT)) boosted = true;
-    if ((school & SSF_FIRE) && hero->DoesWearArtifact(AID_ORB_OF_TEMPESTUOUS_FIRE)) boosted = true;
-    if ((school & SSF_WATER) && hero->DoesWearArtifact(AID_ORB_OF_DRIVING_RAIN)) boosted = true;
+    if ((school & SSF_AIR) && SafeDoesWearArtifact(hero, AID_ORB_OF_THE_FIRMAMENT)) boosted = true;
+    if ((school & SSF_EARTH) && SafeDoesWearArtifact(hero, AID_ORB_OF_SILT)) boosted = true;
+    if ((school & SSF_FIRE) && SafeDoesWearArtifact(hero, AID_ORB_OF_TEMPESTUOUS_FIRE)) boosted = true;
+    if ((school & SSF_WATER) && SafeDoesWearArtifact(hero, AID_ORB_OF_DRIVING_RAIN)) boosted = true;
 
     if (boosted) damage = damage * 150 / 100;
     return damage;
@@ -298,19 +383,20 @@ static int ApplySpellDamageArtifactBonuses(_Hero_* hero, int spell_id, int damag
 static int CalcHeroSpellPower(_BattleMgr_* mgr, int side)
 {
     if (!mgr || side < 0 || side > 1) return 0;
+    if (!o_Spell) return 0;
 
     _Hero_* hero = mgr->hero[side];
     if (!hero || (uint32_t)hero < 0x00400000 || (uint32_t)hero > 0x20000000) return 0;
 
     // 只要求英雄有魔法书；不检查当前魔法值，也不检查本回合是否已经施法。
-    if (hero->doll_art[AS_SPELL_BOOK].id == -1) return 0;
+    if (hero->doll_art[AS_SPELL_BOOK].id == -1 || hero->doll_art[AS_SPELL_BOOK].id == (short)0xFFFF) return 0;
 
     // 禁魔地形检查：spec_terr_type == 2 为诅咒之地，双方只能施放 1 级魔法。
     // spec_terr_type == 1 为魔法平原，法术以专家级施放（由 GetEffectiveSpellLevel 处理）。
     bool cursed_ground = (mgr->spec_terr_type == 2);
 
     // 禁魔披风（Recanter's Cloak）：佩戴方只能施放 1-2 级魔法。
-    bool recanter = hero->DoesWearArtifact(AID_RECANTERS_CLOAK);
+    bool recanter = SafeDoesWearArtifact(hero, AID_RECANTERS_CLOAK);
 
     // 综合最高可用法术等级：诅咒之地→1，禁魔披风→2，否则→5。
     int max_spell_level = 5;
@@ -332,53 +418,19 @@ static int CalcHeroSpellPower(_BattleMgr_* mgr, int side)
     // homm3.h 中 power 定义在 +1142(0x476)，但实际那是 attack。
     // 原版代码中主属性在 0x476~0x479，顺序是 ATK/DEF/SPW/KNO。
     // spell power 在 0x478 (1144 decimal)。
-    // 先用诊断方式确认：
     unsigned char* raw = (unsigned char*)hero;
-    int sp_atk = raw[0x476];
-    int sp_def = raw[0x477];
     int sp_spw = raw[0x478];
-    int sp_kno = raw[0x479];
-    WriteLog("[HeroStats] ATK=%d DEF=%d SPW=%d KNO=%d (hero->power field=%d)",
-        sp_atk, sp_def, sp_spw, sp_kno, hero->power);
 
-    // dump 副技能、宝物、法术（仅首次）
-    static bool s_hero_dumped = false;
-    if (!s_hero_dumped) {
-        s_hero_dumped = true;
-        static const char* hss_names[28] = {
-            "Pathfinding","Archery","Logistics","Scouting","Diplomacy","Navigation",
-            "Leadership","Wisdom","Mysticism","Luck","Ballistics","EagleEye",
-            "Necromancy","Estates","FireMagic","AirMagic","WaterMagic","EarthMagic",
-            "Scholar","Tactics","Artillery","Learning","Offence","Armorer",
-            "Intelligence","Sorcery","Resistance","FirstAid"
-        };
-        for (int i = 0; i < 28; i++) {
-            if (hero->second_skill[i] > 0)
-                WriteLog("[HeroSkill] %s(%d)=%d", hss_names[i], i, hero->second_skill[i]);
-        }
-        for (int i = 0; i < 19; i++) {
-            if (hero->doll_art[i].id != -1 && hero->doll_art[i].id != 0xFFFF)
-                WriteLog("[HeroArt] slot%d id=%d mod=%d", i, hero->doll_art[i].id, hero->doll_art[i].mod);
-        }
-        for (int s = 0; s < 70; s++) {
-            if (hero->spell[s]) {
-                _Spell_& sp2 = o_Spell[s];
-                WriteLog("[HeroSpell] id=%d level=%d eff_power=%d effect=[%d,%d,%d,%d] mana=[%d,%d,%d,%d]",
-                    s, sp2.level, sp2.eff_power,
-                    sp2.effect[0], sp2.effect[1], sp2.effect[2], sp2.effect[3],
-                    sp2.mana_cost[0], sp2.mana_cost[1], sp2.mana_cost[2], sp2.mana_cost[3]);
-            }
-        }
-    }
-
-    // dump 英雄特长
+    // 英雄特长表：用于魔力特长的等级加成。
     int hero_id = *(int*)((char*)hero + 0x1a);
     int hero_level = *(short*)((char*)hero + 0x55);
     _ptr_ spec_table = *(_ptr_*)0x679C80;
-    int spec_type = *(int*)(spec_table + hero_id * 0x28);
-    int spec_param = *(int*)(spec_table + hero_id * 0x28 + 4);
-    WriteLog("[HeroSpec] hero_id=%d level=%d spec_type=%d spec_param=%d",
-        hero_id, hero_level, spec_type, spec_param);
+    int spec_type = -1;
+    int spec_param = -1;
+    if (spec_table && hero_id >= 0 && hero_id < 156) {
+        spec_type = *(int*)(spec_table + hero_id * 0x28);
+        spec_param = *(int*)(spec_table + hero_id * 0x28 + 4);
+    }
 
     int spell_power = sp_spw;  // 使用正确的 spell power 偏移
     if (spell_power < 1) spell_power = 1;
@@ -399,14 +451,13 @@ static int CalcHeroSpellPower(_BattleMgr_* mgr, int side)
 
         // 法术特长：原版函数按英雄等级、特长法术、目标生物等级计算额外加成。
         // 当前“魔法输出能力”不考虑敌方目标，无目标估算参数固定用 1。
-        int spec_bonus = hero->GetSpell_Specialisation_Bonuses(spell_id, 1, damage);
+        int spec_bonus = SafeGetSpellSpecBonus(hero, spell_id, damage);
         damage += spec_bonus;
 
         // 魔力 Sorcery：Basic +5%，Advanced +10%，Expert +15%。
         // 英雄特长(spec_type=0, spec_param=25=HSS_SORCERY)会随等级增强 sorcery。
         // 公式（浮点）：effective_mult = 1 + sorcery_pct + sorcery_pct * (hero_level / 20.0)
         int sorcery = hero->second_skill[HSS_SORCERY];
-        int pre_sorcery = damage;
 
         bool has_sorcery_spec = (spec_type == 0 && spec_param == HSS_SORCERY);
         if (sorcery > 0) {
@@ -423,18 +474,21 @@ static int CalcHeroSpellPower(_BattleMgr_* mgr, int side)
             damage = (int)((double)damage * (1.0 + sorcery_pct));
         }
 
-        int pre_orb = damage;
         damage = ApplySpellDamageArtifactBonuses(hero, spell_id, damage);
-
-        WriteLog("[SpellCalc] spell=%d lv=%d sp=%d base=%d spec=%d sorcery=%d%s(%.4f)(%d->%d) orb=(%d->%d) final=%d",
-            spell_id, level, spell_power, base_damage, spec_bonus,
-            sorcery, has_sorcery_spec ? "+spec" : "",
-            has_sorcery_spec ? (sorcery > 0 ? (sorcery == 1 ? 0.05 : sorcery == 2 ? 0.10 : 0.15) * (1.0 + (double)hero_level / 20.0) : 0.0) : (sorcery > 0 ? (sorcery == 1 ? 0.05 : sorcery == 2 ? 0.10 : 0.15) : 0.0),
-            pre_sorcery, pre_orb, pre_orb, damage, damage);
 
         if (damage > best) best = damage;
     }
     return best;
+}
+
+static int SafeCalcHeroSpellPower(_BattleMgr_* mgr, int side)
+{
+    __try {
+        return CalcHeroSpellPower(mgr, side);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        WriteLog("[RangedOverlayPanel] SEH exception during spell calc side=%d mgr=%p", side, mgr);
+        return 0;
+    }
 }
 
 static bool s_battle_end_logged = false;
@@ -702,15 +756,43 @@ static unsigned int ComputeStackChecksum(_BattleMgr_* mgr)
 {
     if (!mgr) return 0;
     unsigned int hash = 2166136261u; // FNV offset
-    for (int side = 0; side < 2; ++side)
+    hash ^= (unsigned)(mgr->spec_terr_type & 0xFFFF);
+    hash *= 16777619u;
+    for (int side = 0; side < 2; ++side) {
+        hash ^= (unsigned)((uint32_t)mgr->hero[side] >> 4);
+        hash *= 16777619u;
         for (int slot = 0; slot < 21; ++slot) {
             const _BattleStack_& s = mgr->stack[side][slot];
             hash ^= (unsigned)(s.count_current & 0xFFFF);
             hash *= 16777619u;
             hash ^= (unsigned)(s.creature_id & 0xFF);
             hash *= 16777619u;
+            hash ^= (unsigned)(s.hex_ix & 0xFF);
+            hash *= 16777619u;
+            hash ^= (unsigned)(s.lost_hp & 0xFFFF);
+            hash *= 16777619u;
+            hash ^= (unsigned)(s.creature.shots & 0xFF);
+            hash *= 16777619u;
+            hash ^= (unsigned)((s.creature.attack & 0xFF) | ((s.creature.defence & 0xFF) << 8));
+            hash *= 16777619u;
+            hash ^= (unsigned)((s.creature.damage_min & 0xFF) | ((s.creature.damage_max & 0xFF) << 8));
+            hash *= 16777619u;
         }
+    }
     return hash;
+}
+
+static bool SafeComputeStackChecksum(_BattleMgr_* mgr, unsigned int* out)
+{
+    if (!out) return false;
+    __try {
+        *out = ComputeStackChecksum(mgr);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        *out = 0;
+        WriteLog("[RangedOverlayPanel] SEH exception during checksum mgr=%p", mgr);
+        return false;
+    }
 }
 
 // 通过 DirectDraw 离屏 surface 绘制背景图。
@@ -868,11 +950,25 @@ static void DestroyDDBackground(DDBackgroundSurface* bg)
 static void DrawDDBackground(DDBackgroundSurface* bg, int dst_x, int dst_y, int dst_w, int dst_h)
 {
     if (!bg || !bg->dd_surface) return;
-    RECT src_rect = { 0, 0, bg->width, bg->height };
-    RECT dst_rect = { dst_x, dst_y, dst_x + dst_w, dst_y + dst_h };
-    HRESULT hr = o_DDSurfaceBackBuffer->Blt(&dst_rect, bg->dd_surface, &src_rect, DDBLT_WAIT, nullptr);
-    if (FAILED(hr)) {
-        WriteLog("[DDBackground] Blt failed hr=0x%08X", hr);
+    __try {
+        RECT src_rect = { 0, 0, bg->width, bg->height };
+        RECT dst_rect = { dst_x, dst_y, dst_x + dst_w, dst_y + dst_h };
+        HRESULT hr = o_DDSurfaceBackBuffer->Blt(&dst_rect, bg->dd_surface, &src_rect, DDBLT_WAIT, nullptr);
+        if (FAILED(hr)) {
+            WriteLog("[DDBackground] Blt failed hr=0x%08X", hr);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        WriteLog("[DDBackground] SEH exception during Blt dst=(%d,%d,%d,%d)", dst_x, dst_y, dst_w, dst_h);
+    }
+}
+
+static void SafeDrawText(_Fnt_* font, _Pcx16_* screen, const char* text, int x, int y, int w, int h, int color, int align)
+{
+    if (!font || !screen || !text) return;
+    __try {
+        font->TextDraw(screen, text, x, y, w, h, (eTextColor)color, (eTextAlignment)align);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        WriteLog("[RangedOverlayPanel] SEH exception during TextDraw text='%s' rect=(%d,%d,%d,%d)", text, x, y, w, h);
     }
 }
 
@@ -914,6 +1010,11 @@ public:
     }
 
     void Draw(_BattleMgr_* mgr)
+    {
+        DrawImpl(mgr);
+    }
+
+    void DrawImpl(_BattleMgr_* mgr)
     {
         // Get dlg: try combatManager::mainWindow, fallback to gpWindowManager::activeWindow
         _Dlg_* dlg = (mgr && mgr->dlg && (uint32_t)mgr->dlg > 0x10000) ? mgr->dlg : nullptr;
@@ -970,8 +1071,6 @@ public:
         if (!manual_battle_started_) return;
         if (!active_) return;
         if (suppressed_for_result_) return;
-        // NOTE: IsBattleEnded disabled in HD Mod - mgr struct layout unreliable.
-        // if (IsBattleEnded(mgr)) { Destroy(); return; }
 
         if (!battle_area_logged_) {
             battle_area_logged_ = true;
@@ -983,9 +1082,6 @@ public:
         int panel_h = cfg.ranged_panel_height;
         int text_h = 17;
 
-        // HD Mod 下 screen_pcx16 是实际分辨率（如 1712x900），
-        // 而 dlg->rect 仍是 800x600 的逻辑坐标。战斗画布在实际屏幕中居中，
-        // 面板应吸附在这个战斗画布外侧上方，而不是屏幕顶部。
         int battle_x = (screen->width - 800) / 2;
         int battle_y = (screen->height - 600) / 2;
         if (battle_x < 0) battle_x = 0;
@@ -1016,32 +1112,24 @@ public:
             last_y_ = y;
             last_w_ = draw_w;
             last_h_ = draw_h;
-            // 通过 DirectDraw Blt 绘制到 backbuffer，绕开 HD_TC2。
             DrawDDBackground(bg_, x, y, draw_w, draw_h);
         }
 
-        // 正常帧只画缓存文本；dirty 或空缓存时才重算。
-        // TODO: mgr struct layout unreliable in HD Mod - Recalculate disabled.
-        if (dirty_ || !text_[0][0]) {
-            // Recalculate(mgr, dirty_ ? "dirty" : "empty cache");
-            // Use placeholder text to verify panel rendering
-            if (!text_[0][0]) {
-                strcpy(text_[0], "L: ---");
-                strcpy(text_[1], "R: ---");
-                strcpy(text_[2], "");
-                strcpy(text_[3], "");
-                strcpy(text_[4], "");
-                strcpy(text_[5], "");
-            }
-            dirty_ = false;
+        unsigned int checksum = 0;
+        bool checksum_ok = SafeComputeStackChecksum(mgr, &checksum);
+        if (!checksum_ok) return;
+
+        // 正常帧只画缓存文本；dirty、空缓存或栈状态变化时才重算。
+        if (dirty_ || !text_[0][0] || checksum != stack_checksum_) {
+            Recalculate(mgr, dirty_ ? "dirty" : (!text_[0][0] ? "empty cache" : "stack changed"));
         }
 
         _Fnt_* font = GetRangedPanelTextFont();
         if (font) {
             for (int row = 0; row < 3; ++row) {
                 int yy = y + cfg.row_y[row];
-                font->TextDraw(screen, text_[row * 2], left_x, yy, col_w, text_h, (eTextColor)cfg.ranged_panel_text_color, (eTextAlignment)2);
-                font->TextDraw(screen, text_[row * 2 + 1], right_x, yy, col_w, text_h, (eTextColor)cfg.ranged_panel_text_color, (eTextAlignment)0);
+                SafeDrawText(font, screen, text_[row * 2], left_x, yy, col_w, text_h, cfg.ranged_panel_text_color, 2);
+                SafeDrawText(font, screen, text_[row * 2 + 1], right_x, yy, col_w, text_h, cfg.ranged_panel_text_color, 0);
             }
         }
     }
@@ -1114,10 +1202,12 @@ private:
     {
         if (!mgr) return;
 
-        unsigned int checksum = ComputeStackChecksum(mgr);
+        unsigned int checksum = 0;
+        if (!SafeComputeStackChecksum(mgr, &checksum)) return;
         stack_checksum_ = checksum;
-        int ranged[2] = { CalcRangedUnitsPower(mgr, 0), CalcRangedUnitsPower(mgr, 1) };
-        int spell[2] = { CalcHeroSpellPower(mgr, 0), CalcHeroSpellPower(mgr, 1) };
+
+        int ranged[2] = { SafeCalcRangedUnitsPower(mgr, 0), SafeCalcRangedUnitsPower(mgr, 1) };
+        int spell[2] = { SafeCalcHeroSpellPower(mgr, 0), SafeCalcHeroSpellPower(mgr, 1) };
         int total[2] = { ranged[0] + spell[0], ranged[1] + spell[1] };
 
         _snprintf(text_[0], sizeof(text_[0]) - 1, "%d", ranged[0]);
@@ -1131,6 +1221,32 @@ private:
         dirty_ = false;
         WriteLog("[RangedOverlayPanel] recalculated reason=%s checksum=%u ranged=(%d,%d) spell=(%d,%d) total=(%d,%d)",
             reason ? reason : "unknown", checksum, ranged[0], ranged[1], spell[0], spell[1], total[0], total[1]);
+
+        // 每次新战斗打印双面栈摘要
+        static uint32_t s_last_checksum = 0;
+        if (s_last_checksum != checksum || !text_[0][0]) {
+            s_last_checksum = checksum;
+            for (int side = 0; side < 2; ++side) {
+                _Hero_* h = mgr->hero[side];
+                WriteLog("[StackDiag] side=%d hero=%p", side, h);
+                if (h && (uint32_t)h > 0x00400000 && (uint32_t)h < 0x20000000) {
+                    WriteLog("[StackDiag] hero power=%d knowledge=%d spellBookSlot=%d",
+                        (int)((unsigned char*)h)[0x478],
+                        (int)((unsigned char*)h)[0x479],
+                        h->doll_art[17].id);
+                }
+                for (int slot = 0; slot < 21; ++slot) {
+                    _BattleStack_* s = &mgr->stack[side][slot];
+                    if (s->count_current > 0) {
+                        WriteLog("[StackDiag] side=%d slot=%d creature_id=%d count=%d shots=%d atk=%d def=%d dmg=%d~%d hp=%d",
+                            side, slot, s->creature_id, s->count_current, s->creature.shots,
+                            s->creature.attack, s->creature.defence,
+                            s->creature.damage_min, s->creature.damage_max,
+                            s->creature.hit_points);
+                    }
+                }
+            }
+        }
     }
 
     DDBackgroundSurface* bg_;
