@@ -45,7 +45,7 @@
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <StructMemberAlignment>1Byte</StructMemberAlignment>
       <AdditionalOptions>/utf-8 /wd4235 /wd4005 /wd4267 /wd4018 /wd4553 /wd4010 /wd4996 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>$(ProjectDir)deps;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\H3API\single_header;$(ProjectDir)deps;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;_USRDLL;WINDOWS_IGNORE_PACKING_MISMATCH;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
@@ -60,8 +60,7 @@
     <ClCompile Include="BattleValueInfo.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="deps\\H3API.hpp" />
-    <ClInclude Include="deps\stb_image.h" />
+    <ClInclude Include="..\H3API\single_header\H3API.hpp" />
     <ClInclude Include="resource.h" />
   </ItemGroup>
   <ItemGroup>

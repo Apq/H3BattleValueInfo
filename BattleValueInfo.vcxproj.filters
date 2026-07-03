@@ -38,7 +38,7 @@
     <ClInclude Include="deps\HoMM3_GUI.h">
       <Filter>头文件</Filter>
     </ClInclude>
-    <ClInclude Include="deps\stb_image.h">
+    <ClInclude Include="..\H3API\single_header\H3API.hpp">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>

@@ -31,6 +31,12 @@ static const int SPL_FROST_RING = 20;
 static const int SPL_FIREBALL = 21;
 static const int SPL_METEOR_SHOWER = 23;
 static const int SPL_TITANS_LIGHTNING_BOLT = 57;
+static const int SPL_BLESS = 41;
+static const int SPL_CURSE = 42;
+static const int SPL_PRECISION = 44;
+static const int SPL_FORGETFULNESS = 61;
+static const int SPL_BLIND = 62;
+static const int SPL_PARALYZE = 74;
 
 using _Pcx8_ = H3LoadedPcx;
 using _Pcx16_ = H3LoadedPcx16;
@@ -67,7 +73,10 @@ struct _Dlg_ {
     int height;
     char _pad28[0x30 - 0x28];
     H3Vector<H3DlgItem*> items;
-    H3DlgItem* AddItemToOwnArrayList(H3DlgItem* item) { return reinterpret_cast<H3BaseDlg*>(this)->AddItem(item); }
+    H3DlgItem* AddItemToOwnArrayList(H3DlgItem* item) {
+        THISCALL_4(void, 0x5FE2D0, &items, items.end(), 1, &item);
+        return item;
+    }
 };
 
 struct _CreatureInfoCompat {
@@ -98,7 +107,51 @@ struct _BattleStack_ {
     int count_at_start;
     char _pad64[0x74 - 0x64];
     _CreatureInfoCompat creature;
-    char _padDC[0x548 - 0xDC];
+    char _padDC[0x194 - 0xDC];
+    int active_spell_count;
+    int active_spell_duration[81];
+    int active_spell_level[81];
+    char _pad420[0x454 - 0x420];
+    int retaliations;
+    int bless_damage;
+    int curse_damage;
+    int anti_magic;
+    int bloodlust_effect;
+    int precision_effect;
+    int weakness_effect;
+    int stone_skin_effect;
+    int _unknown_474;
+    int prayer_effect;
+    int mirth_effect;
+    int sorrow_effect;
+    int fortune_effect;
+    int misfortune_effect;
+    int slayer_type;
+    int hexes_traveled;
+    int counterstrike_effect;
+    float frenzy_multiplier;
+    float blind_effect;
+    float fire_shield_effect;
+    int _unknown_4A4;
+    float protection_air_effect;
+    float protection_fire_effect;
+    float protection_water_effect;
+    float protection_earth_effect;
+    float shield_effect;
+    float air_shield_effect;
+    unsigned char blinded;
+    unsigned char paralyzed;
+    char _pad4C2[0x4C4 - 0x4C2];
+    int forgetfulness_level;
+    float slow_effect;
+    int haste_effect;
+    int disease_attack_effect;
+    int disease_defense_effect;
+    char _pad4D8[0x4E8 - 0x4D8];
+    int morale;
+    int luck;
+    unsigned char is_done;
+    char _pad4F1[0x548 - 0x4F1];
     bool CanShoot(_BattleStack_* target) { return THISCALL_2(bool, 0x442610, this, target); }
     int Calc_Damage_Bonuses(_BattleStack_* target, int base_damage, int a4, int a5, int a6, int* fireshield_damage) { return THISCALL_7(int, 0x443C60, this, target, base_damage, a4, a5, a6, fireshield_damage); }
 };
@@ -157,11 +210,24 @@ struct _BattleMgr_ {
     int spec_terr_type;
     char _pad53C4[0x53CC - 0x53C4];
     _Hero_* hero[2];
-    char _pad53D4[0x54BC - 0x53D4];
+    char _pad53D4[0x54B4 - 0x53D4];
+    int hero_casted[2];
     int stacks_count[2];
     char _pad54C4[0x54CC - 0x54C4];
     _BattleStack_ stack[2][21];
-    char _pad1329C[0x132FC - 0x1329C];
+    char _pad1329C[0x132A0 - 0x1329C];
+    int turns_since_last_enchanter_cast[2];
+    char _pad132A8[0x132B8 - 0x132A8];
+    int current_mon_side;
+    int current_mon_index;
+    int current_active_side;
+    int auto_combat;
+    _BattleStack_* active_stack;
+    char _pad132CC[0x132D8 - 0x132CC];
+    int attacker_coord;
+    int move_type;
+    char _pad132E0[0x132F8 - 0x132E0];
+    int finished;
     _Dlg_* dlg;
     void RedrawBattlefield(_bool8_ flip, _bool8_ set_battle_redraws, _bool8_ use_battle_redraws, int waiting_time, _bool8_ redraw_background, _bool8_ wait) {
         THISCALL_7(void, 0x493FC0, this, flip, set_battle_redraws, use_battle_redraws, waiting_time, redraw_background, wait);

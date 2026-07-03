@@ -120,7 +120,7 @@ static void CleanupOldLogFilesW(const wchar_t* log_dir, const wchar_t* log_base,
 
     WIN32_FIND_DATAW fd;
     HANDLE h = FindFirstFileW(pattern, &fd);
-    if (h == INVALID_HANDLE_VALUE) return;
+    if (h == INVALID_HANDLE_VALUE) { HeapFree(GetProcessHeap(), 0, entries); return; }
     do {
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
         if (count >= MAX_LOG_FILES_TO_SCAN) break;
@@ -194,10 +194,37 @@ static void SetupDatedLogPathAndCleanup(HMODULE hModule)
 }
 
 
+static void NormalizeUtf8ConfigStringToAnsi(char* text, int capacity)
+{
+    if (!text || capacity <= 1 || !text[0]) return;
+
+    int wide_len = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, nullptr, 0);
+    if (wide_len <= 0 || wide_len > 256) return;
+
+    wchar_t wide[256];
+    if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, wide, wide_len)) return;
+
+    BOOL used_default = FALSE;
+    char ansi[256];
+    int ansi_len = WideCharToMultiByte(CP_ACP, 0, wide, -1, ansi, sizeof(ansi), nullptr, &used_default);
+    if (ansi_len <= 0 || used_default) return;
+
+    strncpy(text, ansi, capacity - 1);
+    text[capacity - 1] = 0;
+}
+
+static int ClampInt(int value, int min_value, int max_value)
+{
+    if (value < min_value) return min_value;
+    if (value > max_value) return max_value;
+    return value;
+}
+
 static void ReadConfig()
 {
     const char* f = g_ini_path;
     GetPrivateProfileStringA("Format", "LabelFightValue", "Fight Value", cfg.label_fight_value, sizeof(cfg.label_fight_value), f);
+    NormalizeUtf8ConfigStringToAnsi(cfg.label_fight_value, sizeof(cfg.label_fight_value));
     GetPrivateProfileStringA("RangedPanel", "BackgroundImage", "rp_bg.pcx", cfg.ranged_panel_image, sizeof(cfg.ranged_panel_image), f);
     GetPrivateProfileStringA("RangedPanel", "TextFont", "smalfont.fnt", cfg.ranged_panel_text_font, sizeof(cfg.ranged_panel_text_font), f);
     cfg.ranged_panel_text_color = GetPrivateProfileIntA("RangedPanel", "TextColor", 4, f);
@@ -210,4 +237,11 @@ static void ReadConfig()
     cfg.row_y[1] = GetPrivateProfileIntA("RangedPanel", "Row2Y", 42, f);
     cfg.row_y[2] = GetPrivateProfileIntA("RangedPanel", "Row3Y", 60, f);
     cfg.fight_value_y_offset = GetPrivateProfileIntA("Layout", "FightValueYOffset", 8, f);
+
+    cfg.ranged_panel_width = ClampInt(cfg.ranged_panel_width, 160, 800);
+    cfg.ranged_panel_height = ClampInt(cfg.ranged_panel_height, 40, 240);
+    cfg.ranged_panel_y = ClampInt(cfg.ranged_panel_y, -200, 400);
+    for (int i = 0; i < 3; ++i)
+        cfg.row_y[i] = ClampInt(cfg.row_y[i], 0, cfg.ranged_panel_height - 17);
+    cfg.fight_value_y_offset = ClampInt(cfg.fight_value_y_offset, -40, 80);
 }

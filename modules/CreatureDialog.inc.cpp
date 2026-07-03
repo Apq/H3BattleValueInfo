@@ -1,16 +1,18 @@
 // ========== 战斗价值显示与远程输出对比 ==========
 
-static int s_diag_dlgdefproc_count = 0;
-
 // 返回 dlg 内指定 id 的控件；用于判断是否已插入战斗价值、读取数量文本。
 static char* FindDlgItem(_Dlg_* dlg, short target_id)
 {
     if (!dlg) return nullptr;
+    if (IsBadReadPtr(dlg, 0x3C)) return nullptr;
     unsigned* vec = (unsigned*)((char*)dlg + 0x30);
+    if (IsBadReadPtr(vec, 12)) return nullptr;
     char** data = (char**)vec[1];
     unsigned cnt = (vec[2] >= vec[1]) ? (vec[2] - vec[1]) / 4 : 0;
+    if (!data || cnt > 256 || IsBadReadPtr(data, cnt * sizeof(char*))) return nullptr;
     for (unsigned i = 0; i < cnt; i++) {
         char* it = data[i];
+        if (IsBadReadPtr(it, 0x12)) continue;
         if (it && *(short*)(it + 0x10) == target_id) return it;
     }
     return nullptr;
@@ -43,12 +45,9 @@ static bool IsHiddenBattleByEngine(_BattleMgr_* mgr)
     return THISCALL_1(_bool8_, 0x46A080, mgr) != 0;
 }
 
-static void DestroyRangedPanel();
 static _Fnt_* GetRangedPanelTextFont();
 static unsigned int ComputeStackChecksum(_BattleMgr_* mgr);
 
-static const int RP_ID_BG = 32000;
-static const int RP_ID_TEXT0 = 32001;
 static const int RP_BASE_Y_OFFSET = 23;
 
 static void WriteWideFileUtf8BomIfEmpty(HANDLE h)
@@ -112,6 +111,7 @@ static int GetCreatureFightValueById(int creature_id)
     if (creature_id < 0 || creature_id >= 197) return 0;
     char* table = *(char**)0x6747B0;
     if (!table) return 0;
+    if (IsBadReadPtr(table + creature_id * 0x74 + 0x3C, sizeof(int))) return 0;
     return *(int*)(table + creature_id * 0x74 + 0x3C);
 }
 
@@ -120,19 +120,23 @@ static int GetCurrentStackFightValueEstimate(int creature_id, int count, int fig
 {
     if (creature_id < 0 || count <= 0 || fight_value <= 0 || !o_BattleMgr) return 0;
 
+    int matches = 0;
+    int estimate = 0;
     for (int side = 0; side < 2; ++side) {
         for (int slot = 0; slot < 21; ++slot) {
             const _BattleStack_& s = o_BattleMgr->stack[side][slot];
             if (s.creature_id != creature_id || s.count_current != count) continue;
+            ++matches;
             int hp = s.creature.hit_points;
             if (hp <= 0) return 0;
             int lost_hp = s.lost_hp;
             if (lost_hp < 0) lost_hp = 0;
             if (lost_hp >= hp) lost_hp = hp - 1;
-            return (fight_value * (hp - lost_hp) + hp / 2) / hp;
+            estimate = (fight_value * (hp - lost_hp) + hp / 2) / hp;
+            if (matches > 1) return 0;
         }
     }
-    return 0;
+    return matches == 1 ? estimate : 0;
 }
 
 // 在名称行 Y 坐标基础上按配置下移后新增生物配置值；已有 id=3008/3009 时跳过，避免 BUILD/DefProc 重复插入。
@@ -144,9 +148,13 @@ static void AddFightValueLine(_Dlg_* dlg, int fight_value, int current_value)
     char* name_item = FindDlgItem(dlg, 203);
     short y = (short)((name_item ? *(short*)(name_item + 0x1A) : 41) + cfg.fight_value_y_offset);
 
-    _DlgStaticText_* label = _DlgStaticText_::Create(25, y, 130, 17,
-        cfg.label_fight_value, "smalfont.fnt", 4, 3009, 0 /*HLEFT*/, 0);
-    if (label) dlg->AddItemToOwnArrayList(label);
+    h3::H3DlgText* label = h3::H3DlgText::Create(
+        25, y, 130, 17,
+        cfg.label_fight_value, "smalfont.fnt",
+        4, 3009, h3::eTextAlignment::TOP_LEFT, 0);
+    if (label) {
+        dlg->AddItemToOwnArrayList((h3::H3DlgItem*)label);
+    }
 
     static char buf[64];
     if (current_value > 0)
@@ -155,8 +163,12 @@ static void AddFightValueLine(_Dlg_* dlg, int fight_value, int current_value)
         _snprintf(buf, sizeof(buf) - 1, "%d", fight_value);
     buf[sizeof(buf) - 1] = 0;
 
-    _DlgStaticText_* value = _DlgStaticText_::Create(148, y, 128, 17, buf, "smalfont.fnt", 4, 3008, 2 /*HRIGHT*/, 0);
-    if (value) dlg->AddItemToOwnArrayList(value);
+    h3::H3DlgText* value = h3::H3DlgText::Create(
+        148, y, 128, 17, buf, "smalfont.fnt",
+        4, 3008, h3::eTextAlignment::TOP_RIGHT, 0);
+    if (value) {
+        dlg->AddItemToOwnArrayList((h3::H3DlgItem*)value);
+    }
 }
 
 static bool IsMegaDescLoaded()
@@ -166,18 +178,21 @@ static bool IsMegaDescLoaded()
 
 static void TryAddFightValueLine(_Dlg_* dlg)
 {
-    // 彻底禁用：AddItemToOwnArrayList 在当前 MegaDesc 版本上崩溃
-    return;
-    if (!IsMegaDescLoaded()) return;
-    if (!dlg || dlg->width != 298 || !FindDlgItem(dlg, 200)) return;
-    // 已插入过则跳过
-    if (FindDlgItem(dlg, 3009) || FindDlgItem(dlg, 3008)) return;
-
     __try {
+        if (!IsMegaDescLoaded()) return;
+        if (!dlg || IsBadReadPtr(dlg, 0x64) || dlg->width != 298 || !FindDlgItem(dlg, 200)) return;
+        if (FindDlgItem(dlg, 3009) || FindDlgItem(dlg, 3008)) return;
+
         int creature_id = *(int*)((char*)dlg + 0x60);
+        if (creature_id < 0 || creature_id >= 197) return;
+
         int single_fv = GetCreatureFightValueById(creature_id);
+        if (single_fv <= 0) return;
+
         char* count_item = FindDlgItem(dlg, 204);
-        const char* count_text = count_item ? *(_char_**)(count_item + 0x34) : nullptr;
+        const char* count_text = nullptr;
+        if (count_item && !IsBadReadPtr(count_item + 0x38, 1))
+            count_text = *(_char_**)(count_item + 0x34);
         int count = ParseFirstPositiveInt(count_text);
         int current_value = GetCurrentStackFightValueEstimate(creature_id, count, single_fv);
 
@@ -190,35 +205,18 @@ static void TryAddFightValueLine(_Dlg_* dlg)
 // BUILD 阶段 hook：窗口构建完成后插入战斗价值行。
 int __stdcall Hook_BuildCombat(LoHook* h, HookContext* c)
 {
-    WriteLog("[BuildCombat] dlg=%p ebx", c->ebx);
     TryAddFightValueLine((_Dlg_*)c->ebx);
     return EXEC_DEFAULT;
 }
 int __stdcall Hook_BuildAdventure(LoHook* h, HookContext* c)
 {
-    WriteLog("[BuildAdventure] dlg=%p esi", c->esi);
     TryAddFightValueLine((_Dlg_*)c->esi);
     return EXEC_DEFAULT;
 }
 int __stdcall Hook_BuildTown(LoHook* h, HookContext* c)
 {
-    WriteLog("[BuildTown] dlg=%p esi", c->esi);
     TryAddFightValueLine((_Dlg_*)c->esi);
     return EXEC_DEFAULT;
-}
-
-// DefProc 兜底：仅诊断，不插入控件
-int __stdcall Hook_DlgDefProc(HiHook* h, _Dlg_* dlg, _EventMsg_* msg)
-{
-    if (o_BattleMgr && s_diag_dlgdefproc_count < 20) {
-        ++s_diag_dlgdefproc_count;
-        WriteLog("[Diag] DlgDefProc #%d dlg=%p rect=(%d,%d,%d,%d) currentDlg=%p battleDlg=%p msg=(%d,%d,%d)",
-            s_diag_dlgdefproc_count, dlg,
-            dlg ? dlg->x : -1, dlg ? dlg->y : -1, dlg ? dlg->width : -1, dlg ? dlg->height : -1,
-            o_CurrentDlg, o_BattleMgr ? o_BattleMgr->dlg : nullptr,
-            msg ? msg->command : -1, msg ? msg->subtype : -1, msg ? msg->itemId : -1);
-    }
-    return THISCALL_2(int, h->GetDefaultFunc(), dlg, msg);
 }
 
 // ========== 战场顶部远程输出面板 ==========
@@ -286,40 +284,29 @@ static int SafeGetLandModifier(_Hero_* hero)
     }
 }
 
-static int SafeCalcRangedUnitsPower(_BattleMgr_* mgr, int side);
-static int SafeCalcHeroSpellPower(_BattleMgr_* mgr, int side);
+static bool SafeCalcRangedUnitsPower(_BattleMgr_* mgr, int side, int* out);
+static bool SafeCalcHeroSpellPower(_BattleMgr_* mgr, int side, int* out);
 
 static int CalcRangedOutputToTarget(_BattleMgr_* mgr, int side, _BattleStack_* target)
 {
     if (!mgr || side < 0 || side > 1 || !target || target->count_current <= 0) return 0;
 
-    static bool s_ranged_detail = true; // 首次自动开启，后续关闭
-
     __int64 output = 0;
     for (int slot = 0; slot < 21; ++slot) {
         _BattleStack_* shooter = &mgr->stack[side][slot];
         if (shooter->count_current <= 0 || shooter->creature.shots <= 0) continue;
+        if (shooter->blinded || shooter->paralyzed || shooter->forgetfulness_level > 0) continue;
 
         bool can_shoot = SafeCanShoot(shooter, target);
         int base_damage = can_shoot ? SafeCalcBaseDamage(shooter) : 0;
-
-        if (s_ranged_detail) {
-            WriteLog("[RangedCalc] side=%d slot=%d cr=%d count=%d shots=%d canShoot=%d baseDmg=%d target_cr=%d",
-                side, slot, shooter->creature_id, shooter->count_current, shooter->creature.shots,
-                can_shoot ? 1 : 0, base_damage, target->creature_id);
-        }
 
         if (!can_shoot) continue;
         if (base_damage <= 0) continue;
 
         int fireshield_damage = 0;
         int damage = SafeCalcDamageBonuses(shooter, target, base_damage, &fireshield_damage);
-        if (s_ranged_detail && damage > 0) {
-            WriteLog("[RangedCalc] -> damage=%d fireshield=%d", damage, fireshield_damage);
-        }
         if (damage > 0) output += damage;
     }
-    s_ranged_detail = false; // 只诊断首次
     if (output > 0x7FFFFFFF) return 0x7FFFFFFF;
     return (int)output;
 }
@@ -344,13 +331,15 @@ static int CalcRangedUnitsPower(_BattleMgr_* mgr, int side)
     return has_target ? min_output : 0;
 }
 
-static int SafeCalcRangedUnitsPower(_BattleMgr_* mgr, int side)
+static bool SafeCalcRangedUnitsPower(_BattleMgr_* mgr, int side, int* out)
 {
+    if (!out) return false;
     __try {
-        return CalcRangedUnitsPower(mgr, side);
+        *out = CalcRangedUnitsPower(mgr, side);
+        return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         WriteLog("[RangedOverlayPanel] SEH exception during ranged calc side=%d mgr=%p", side, mgr);
-        return 0;
+        return false;
     }
 }
 
@@ -486,33 +475,16 @@ static int CalcHeroSpellPower(_BattleMgr_* mgr, int side)
     return best;
 }
 
-static int SafeCalcHeroSpellPower(_BattleMgr_* mgr, int side)
+static bool SafeCalcHeroSpellPower(_BattleMgr_* mgr, int side, int* out)
 {
+    if (!out) return false;
     __try {
-        return CalcHeroSpellPower(mgr, side);
+        *out = CalcHeroSpellPower(mgr, side);
+        return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         WriteLog("[RangedOverlayPanel] SEH exception during spell calc side=%d mgr=%p", side, mgr);
-        return 0;
+        return false;
     }
-}
-
-static bool s_battle_end_logged = false;
-
-static bool IsBattleEnded(_BattleMgr_* mgr)
-{
-    if (!mgr) return true;
-    int alive[2] = { 0, 0 };
-    for (int side = 0; side < 2; ++side) {
-        for (int slot = 0; slot < 21; ++slot) {
-            if (mgr->stack[side][slot].count_current > 0) ++alive[side];
-        }
-    }
-    bool ended = alive[0] == 0 || alive[1] == 0;
-    if (ended && !s_battle_end_logged) {
-        s_battle_end_logged = true;
-        WriteLog("[RangedPanel] battle ended by alive stacks: left=%d right=%d", alive[0], alive[1]);
-    }
-    return ended;
 }
 
 static bool ReadWholeFile(const char* path, unsigned char** outData, int* outSize)
@@ -534,256 +506,84 @@ static bool ReadWholeFile(const char* path, unsigned char** outData, int* outSiz
     return true;
 }
 
-// ---- 8-bit PCX → _Pcx8_（保留索引+调色板，颜色精准）----
-static _Pcx8_* DecodePcx8File(const char* path)
-{
-    unsigned char* data = nullptr;
-    int size = 0;
-    if (!ReadWholeFile(path, &data, &size)) return nullptr;
-    if (size < 128) { free(data); return nullptr; }
-
-    int bpp     = data[3];
-    int xmin    = *(short*)(data + 4);
-    int ymin    = *(short*)(data + 6);
-    int xmax    = *(short*)(data + 8);
-    int ymax    = *(short*)(data + 10);
-    int nplanes = data[65];
-    int bpl     = *(short*)(data + 66);
-    int w = xmax - xmin + 1;
-    int h = ymax - ymin + 1;
-
-    if (w <= 0 || h <= 0 || w > 4096 || h > 4096) { free(data); return nullptr; }
-    if (!(nplanes == 1 && bpp == 8)) { free(data); return nullptr; }  // 只处理 8-bit
-
-    int rawSize = bpl * h;
-    unsigned char* raw = (unsigned char*)malloc(rawSize);
-    if (!raw) { free(data); return nullptr; }
-
-    int pos = 128, rp = 0;
-    while (rp < rawSize && pos < size) {
-        unsigned char b = data[pos++];
-        if ((b & 0xC0) == 0xC0) {
-            int cnt = b & 0x3F;
-            if (pos >= size) break;
-            unsigned char val = data[pos++];
-            for (int i = 0; i < cnt && rp < rawSize; ++i) raw[rp++] = val;
-        } else {
-            raw[rp++] = b;
-        }
-    }
-
-    // 调色板
-    unsigned char pal[768] = {0};
-    bool palFound = false;
-    if (size >= 769 && data[size - 769] == 0x0C) {
-        memcpy(pal, data + (size - 768), 768);
-        palFound = true;
-    }
-    if (!palFound) {
-        for (int i = size - 769; i >= 0; --i) {
-            if (data[i] == 0x0C && i + 768 < size) {
-                memcpy(pal, data + i + 1, 768);
-                palFound = true;
-                break;
-            }
-        }
-    }
-
-    _Pcx8_* pcx8 = H3LoadedPcx::Create("bv_panel", w, h);
-    if (!pcx8) { free(raw); free(data); return nullptr; }
-
-    for (int y = 0; y < h; y++)
-        memcpy((unsigned char*)pcx8->buffer + y * pcx8->scanlineSize, raw + y * bpl, w);
-
-    // 设置 palette24
-    for (int i = 0; i < 256; i++) {
-        pcx8->palette888[i].r = pal[i * 3];
-        pcx8->palette888[i].g = pal[i * 3 + 1];
-        pcx8->palette888[i].b = pal[i * 3 + 2];
-    }
-    // 设置 palette16 (RGB565)
-    for (int i = 0; i < 256; i++)
-        pcx8->palette565[i] = RGB565_fromR8G8B8(pal[i * 3], pal[i * 3 + 1], pal[i * 3 + 2]);
-
-    pcx8->IncreaseReferences();
-    free(raw);
-    free(data);
-    return pcx8;
-}
-
-// ---- 24-bit PCX / PNG / JPG / BMP → 量化到游戏调色板 → _Pcx8_ ----
-static unsigned char* DecodePcxFile(const char* path, int* outW, int* outH)
-{
-    unsigned char* data = nullptr;
-    int size = 0;
-    if (!ReadWholeFile(path, &data, &size)) return nullptr;
-    if (size < 128) { free(data); return nullptr; }
-
-    int bpp      = data[3];
-    int xmin     = *(short*)(data + 4);
-    int ymin     = *(short*)(data + 6);
-    int xmax     = *(short*)(data + 8);
-    int ymax     = *(short*)(data + 10);
-    int nplanes  = data[65];
-    int bpl      = *(short*)(data + 66);
-    int w = xmax - xmin + 1;
-    int h = ymax - ymin + 1;
-
-    if (w <= 0 || h <= 0 || w > 4096 || h > 4096) { free(data); return nullptr; }
-
-    int rawSize = bpl * nplanes * h;
-    unsigned char* raw = (unsigned char*)malloc(rawSize);
-    if (!raw) { free(data); return nullptr; }
-
-    int pos = 128, rp = 0;
-    while (rp < rawSize && pos < size) {
-        unsigned char b = data[pos++];
-        if ((b & 0xC0) == 0xC0) {
-            int cnt = b & 0x3F;
-            if (pos >= size) break;
-            unsigned char val = data[pos++];
-            for (int i = 0; i < cnt && rp < rawSize; ++i) raw[rp++] = val;
-        } else {
-            raw[rp++] = b;
-        }
-    }
-
-    unsigned char* rgb = (unsigned char*)malloc(w * h * 3);
-    if (!rgb) { free(raw); free(data); return nullptr; }
-
-    if (nplanes == 3 && bpp == 8) {
-        for (int y = 0; y < h; y++) {
-            int base = y * bpl * nplanes;
-            for (int x = 0; x < w; x++) {
-                rgb[(y * w + x) * 3]     = raw[base + x];
-                rgb[(y * w + x) * 3 + 1] = raw[base + bpl + x];
-                rgb[(y * w + x) * 3 + 2] = raw[base + 2 * bpl + x];
-            }
-        }
-    } else if (nplanes == 1 && bpp == 8) {
-        unsigned char pal[768] = {0};
-        bool palFound = false;
-        if (size >= 769 && data[size - 769] == 0x0C) {
-            memcpy(pal, data + (size - 768), 768);
-            palFound = true;
-        }
-        if (!palFound) {
-            for (int i = size - 769; i >= 0; --i) {
-                if (data[i] == 0x0C && i + 768 < size) {
-                    memcpy(pal, data + i + 1, 768);
-                    palFound = true;
-                    break;
-                }
-            }
-        }
-        for (int y = 0; y < h; y++) {
-            for (int x = 0; x < w; x++) {
-                unsigned char idx = raw[y * bpl + x];
-                rgb[(y * w + x) * 3]     = pal[idx * 3];
-                rgb[(y * w + x) * 3 + 1] = pal[idx * 3 + 1];
-                rgb[(y * w + x) * 3 + 2] = pal[idx * 3 + 2];
-            }
-        }
-    } else {
-        free(raw); free(data); free(rgb);
-        return nullptr;
-    }
-
-    free(raw);
-    free(data);
-    *outW = w;
-    *outH = h;
-    return rgb;
-}
-
-// ---- 统一图片加载：按扩展名自适应 ----
-// .pcx → PCX 解码器；.png/.jpg/.bmp/… → stb_image
-// 输出 RGB888（3 bytes/pixel），调用方 free()。
-static unsigned char* DecodeImageFile(const char* path, const char* filename, int* outW, int* outH)
-{
-    const char* ext = strrchr(filename, '.');
-    bool isPcx = ext && _stricmp(ext, ".pcx") == 0;
-
-    if (isPcx)
-        return DecodePcxFile(path, outW, outH);
-
-    // stb_image 路径
-    unsigned char* fileData = nullptr;
-    int fileSize = 0;
-    if (!ReadWholeFile(path, &fileData, &fileSize)) return nullptr;
-
-    int w = 0, h = 0, comp = 0;
-    unsigned char* rgba = stbi_load_from_memory(fileData, fileSize, &w, &h, &comp, 4);
-    free(fileData);
-    if (!rgba) return nullptr;
-
-    unsigned char* rgb = (unsigned char*)malloc(w * h * 3);
-    if (!rgb) { stbi_image_free(rgba); return nullptr; }
-    for (int i = 0; i < w * h; ++i) {
-        rgb[i * 3]     = rgba[i * 4];
-        rgb[i * 3 + 1] = rgba[i * 4 + 1];
-        rgb[i * 3 + 2] = rgba[i * 4 + 2];
-    }
-    stbi_image_free(rgba);
-    *outW = w;
-    *outH = h;
-    return rgb;
-}
-
-static _Pcx8_* QuantizeRgbAsPcx8(unsigned char* rgb, int w, int h, _Pcx8_* palSrc, const char* resName)
-{
-    if (!rgb || !palSrc || w <= 0 || h <= 0) return nullptr;
-    _Pcx8_* pcx8 = H3LoadedPcx::Create(resName, w, h);
-    if (!pcx8) return nullptr;
-    memcpy(&pcx8->palette888, &palSrc->palette888, sizeof(pcx8->palette888)); pcx8->palette565.InitiateFromPalette888(pcx8->palette888);
-
-    unsigned char* dst = (unsigned char*)pcx8->buffer;
-    for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-            unsigned char* p = rgb + (y * w + x) * 3;
-            int best = 0;
-            int bestD = 0x7FFFFFFF;
-            for (int i = 1; i < 256; i++) {
-                int dr = (int)p[0] - (int)palSrc->palette888[i].r;
-                int dg = (int)p[1] - (int)palSrc->palette888[i].g;
-                int db = (int)p[2] - (int)palSrc->palette888[i].b;
-                int d = dr * dr + dg * dg + db * db;
-                if (d < bestD) { bestD = d; best = i; if (d == 0) break; }
-            }
-            dst[y * pcx8->scanlineSize + x] = (unsigned char)best;
-        }
-    }
-    pcx8->IncreaseReferences();
-    return pcx8;
-}
-
 static unsigned int ComputeStackChecksum(_BattleMgr_* mgr)
 {
     if (!mgr) return 0;
     unsigned int hash = 2166136261u; // FNV offset
-    hash ^= (unsigned)(mgr->spec_terr_type & 0xFFFF);
-    hash *= 16777619u;
+
+#define BVI_HASH_INT(v) do { hash ^= (unsigned)(v); hash *= 16777619u; } while (0)
+
+    BVI_HASH_INT(mgr->spec_terr_type);
+    BVI_HASH_INT(mgr->hero_casted[0]);
+    BVI_HASH_INT(mgr->hero_casted[1]);
+    BVI_HASH_INT(mgr->stacks_count[0]);
+    BVI_HASH_INT(mgr->stacks_count[1]);
+    BVI_HASH_INT(mgr->current_mon_side);
+    BVI_HASH_INT(mgr->current_mon_index);
+    BVI_HASH_INT(mgr->current_active_side);
+    BVI_HASH_INT(mgr->move_type);
+    BVI_HASH_INT(mgr->attacker_coord);
+    BVI_HASH_INT(mgr->finished);
+    BVI_HASH_INT((uint32_t)mgr->active_stack >> 4);
+
     for (int side = 0; side < 2; ++side) {
-        hash ^= (unsigned)((uint32_t)mgr->hero[side] >> 4);
-        hash *= 16777619u;
+        BVI_HASH_INT((uint32_t)mgr->hero[side] >> 4);
+        if (mgr->hero[side] && (uint32_t)mgr->hero[side] > 0x00400000 && (uint32_t)mgr->hero[side] < 0x20000000) {
+            _Hero_* h = mgr->hero[side];
+            BVI_HASH_INT(h->doll_art[AS_SPELL_BOOK].id);
+            BVI_HASH_INT(((unsigned char*)h)[0x478]);
+            BVI_HASH_INT(((unsigned char*)h)[0x479]);
+            BVI_HASH_INT(h->second_skill[HSS_SORCERY]);
+            for (int i = 0; i < 70; ++i) {
+                if (h->spell[i]) BVI_HASH_INT((i << 8) | h->spell[i]);
+            }
+        }
         for (int slot = 0; slot < 21; ++slot) {
             const _BattleStack_& s = mgr->stack[side][slot];
-            hash ^= (unsigned)(s.count_current & 0xFFFF);
-            hash *= 16777619u;
-            hash ^= (unsigned)(s.creature_id & 0xFF);
-            hash *= 16777619u;
-            hash ^= (unsigned)(s.hex_ix & 0xFF);
-            hash *= 16777619u;
-            hash ^= (unsigned)(s.lost_hp & 0xFFFF);
-            hash *= 16777619u;
-            hash ^= (unsigned)(s.creature.shots & 0xFF);
-            hash *= 16777619u;
-            hash ^= (unsigned)((s.creature.attack & 0xFF) | ((s.creature.defence & 0xFF) << 8));
-            hash *= 16777619u;
-            hash ^= (unsigned)((s.creature.damage_min & 0xFF) | ((s.creature.damage_max & 0xFF) << 8));
-            hash *= 16777619u;
+            BVI_HASH_INT(s.count_current);
+            BVI_HASH_INT(s.count_before_attack);
+            BVI_HASH_INT(s.creature_id);
+            BVI_HASH_INT(s.hex_ix);
+            BVI_HASH_INT(s.def_group_ix);
+            BVI_HASH_INT(s.army_slot_ix);
+            BVI_HASH_INT(s.count_at_start);
+            BVI_HASH_INT(s.lost_hp);
+            BVI_HASH_INT(s.creature.shots);
+            BVI_HASH_INT(s.creature.attack);
+            BVI_HASH_INT(s.creature.defence);
+            BVI_HASH_INT(s.creature.damage_min);
+            BVI_HASH_INT(s.creature.damage_max);
+            BVI_HASH_INT(s.creature.hit_points);
+            BVI_HASH_INT(s.active_spell_count);
+            BVI_HASH_INT(s.active_spell_duration[SPL_BLESS]);
+            BVI_HASH_INT(s.active_spell_duration[SPL_CURSE]);
+            BVI_HASH_INT(s.active_spell_duration[SPL_PRECISION]);
+            BVI_HASH_INT(s.active_spell_duration[SPL_FORGETFULNESS]);
+            BVI_HASH_INT(s.active_spell_duration[SPL_BLIND]);
+            BVI_HASH_INT(s.active_spell_duration[SPL_PARALYZE]);
+            BVI_HASH_INT(s.active_spell_level[SPL_BLESS]);
+            BVI_HASH_INT(s.active_spell_level[SPL_CURSE]);
+            BVI_HASH_INT(s.active_spell_level[SPL_PRECISION]);
+            BVI_HASH_INT(s.active_spell_level[SPL_FORGETFULNESS]);
+            BVI_HASH_INT(s.bless_damage);
+            BVI_HASH_INT(s.curse_damage);
+            BVI_HASH_INT(s.bloodlust_effect);
+            BVI_HASH_INT(s.precision_effect);
+            BVI_HASH_INT(s.weakness_effect);
+            BVI_HASH_INT(s.prayer_effect);
+            BVI_HASH_INT(s.slayer_type);
+            BVI_HASH_INT(s.frenzy_multiplier * 1000.0f);
+            BVI_HASH_INT(s.shield_effect * 1000.0f);
+            BVI_HASH_INT(s.air_shield_effect * 1000.0f);
+            BVI_HASH_INT(s.blinded);
+            BVI_HASH_INT(s.paralyzed);
+            BVI_HASH_INT(s.forgetfulness_level);
+            BVI_HASH_INT(s.morale);
+            BVI_HASH_INT(s.luck);
+            BVI_HASH_INT(s.is_done);
         }
     }
+#undef BVI_HASH_INT
     return hash;
 }
 
@@ -873,6 +673,12 @@ static DDBackgroundSurface* CreateDDBackground(const char* pcx_path)
             raw[rp++] = b;
         }
     }
+    if (rp < rawSize) {
+        WriteLog("[DDBackground] incomplete PCX data decoded=%d expected=%d", rp, rawSize);
+        free(raw);
+        free(data);
+        return nullptr;
+    }
 
     unsigned char pal[768] = {0};
     bool palFound = false;
@@ -888,6 +694,12 @@ static DDBackgroundSurface* CreateDDBackground(const char* pcx_path)
                 break;
             }
         }
+    }
+    if (!palFound) {
+        WriteLog("[DDBackground] PCX palette not found");
+        free(raw);
+        free(data);
+        return nullptr;
     }
     free(data);
 
@@ -929,10 +741,6 @@ static DDBackgroundSurface* CreateDDBackground(const char* pcx_path)
     pf.dwSize = sizeof(pf);
     dd_surf->GetPixelFormat(&pf);
 
-    WriteLog("[DDBackground] locked w=%d h=%d pitch=%d bpp=%d RMask=0x%08X GMask=0x%08X BMask=0x%08X",
-        lock_desc.dwWidth, lock_desc.dwHeight, lock_desc.lPitch,
-        pf.dwRGBBitCount, pf.dwRBitMask, pf.dwGBitMask, pf.dwBBitMask);
-
     if (pf.dwRGBBitCount == 16) {
         // 16-bit：直接写 RGB565
         for (int y = 0; y < h; y++) {
@@ -957,6 +765,10 @@ static DDBackgroundSurface* CreateDDBackground(const char* pcx_path)
         }
     } else {
         WriteLog("[DDBackground] unsupported bpp=%d", pf.dwRGBBitCount);
+        dd_surf->Unlock(nullptr);
+        dd_surf->Release();
+        free(raw);
+        return nullptr;
     }
 
     dd_surf->Unlock(nullptr);
@@ -966,7 +778,6 @@ static DDBackgroundSurface* CreateDDBackground(const char* pcx_path)
     bg->dd_surface = dd_surf;
     bg->width = w;
     bg->height = h;
-    WriteLog("[DDBackground] created w=%d h=%d", w, h);
     return bg;
 }
 
@@ -1081,11 +892,9 @@ public:
         active_ = true;
         manual_battle_started_ = true;
         suppressed_for_result_ = false;
-        battle_area_logged_ = false;
         stack_checksum_ = 0;
         ResetText();
         MarkDirty(reason);
-        WriteLog("[RangedOverlayPanel] armed reason=%s mgr=%p", reason ? reason : "unknown", mgr);
     }
 
     void Destroy()
@@ -1106,24 +915,11 @@ public:
 
     void DrawImpl(_BattleMgr_* mgr)
     {
-        // Get dlg: try combatManager::mainWindow, fallback to gpWindowManager::activeWindow
+        // 面板只认战斗管理器持有的主窗口；activeWindow 仅用于结果框检测。
         _Dlg_* dlg = (mgr && mgr->dlg && (uint32_t)mgr->dlg > 0x10000) ? mgr->dlg : nullptr;
-        if (!dlg) {
-            char* wndMgr = (char*)*(uint32_t*)0x6992D0;
-            if (wndMgr) {
-                uint32_t aw = *(uint32_t*)(wndMgr + 0x50);
-                if (aw >= 0x01000000 && aw <= 0x20000000) dlg = (_Dlg_*)aw;
-            }
-        }
         _Dlg_* active_dlg = GetActiveDlg();
         _Pcx16_* screen = o_WndMgr ? o_WndMgr->screen_pcx16 : nullptr;
         if (!screen || !dlg) return;
-
-        if (diag_draw_count_ < 20) {
-            ++diag_draw_count_;
-            WriteLog("[Diag] RangedOverlayPanel::Draw #%d mgr=%p dlg=%p active=%d currentDlg=%p",
-                diag_draw_count_, mgr, dlg, active_ ? 1 : 0, o_CurrentDlg);
-        }
 
         // 新战斗管理器出现时，重置运行态并置脏：进入战斗后首次绘制计算一次。
         if (last_mgr_ != mgr) {
@@ -1139,7 +935,6 @@ public:
         // 新战斗窗口出现时，重新加载背景并置脏；位置仍按战斗 dlg 计算。
         if (last_dlg_ != dlg) {
             last_dlg_ = dlg;
-            s_battle_end_logged = false;
             stack_checksum_ = 0;
             ResetText();
             ReleaseBackground();
@@ -1158,12 +953,10 @@ public:
             SuppressForResult("hidden battle", mgr, active_dlg);
             return;
         }
-        // 从对话框/结果界面返回：恢复面板（含第二次重打）
-        if (suppressed_for_result_ && manual_battle_started_ && active_dlg == nullptr) {
-            WriteLog("[RangedOverlayPanel] re-armed after result dismiss mgr=%p", mgr);
+        // 从结果界面返回：当前不再处于结果/隐藏/结束状态时即可恢复。
+        if (suppressed_for_result_ && manual_battle_started_) {
             active_ = true;
             suppressed_for_result_ = false;
-            battle_area_logged_ = false;
             stack_checksum_ = 0;
             ResetText();
             MarkDirty("re-enter manual battle");
@@ -1172,12 +965,6 @@ public:
         if (!manual_battle_started_) return;
         if (!active_) return;
         if (suppressed_for_result_) return;
-
-        if (!battle_area_logged_) {
-            battle_area_logged_ = true;
-            WriteLog("[RangedOverlayPanel] screen=%dx%d dlg=%p rect=(%d,%d,%d,%d)",
-                screen->width, screen->height, dlg, dlg->x, dlg->y, dlg->width, dlg->height);
-        }
 
         int panel_w = cfg.ranged_panel_width;
         int panel_h = cfg.ranged_panel_height;
@@ -1192,11 +979,6 @@ public:
         if (x < 0) x = 0;
         int y = battle_y - panel_h - RP_BASE_Y_OFFSET - cfg.ranged_panel_y;
         if (y < 0) y = 0;
-
-        if (diag_draw_count_ == 1) {
-            WriteLog("[RangedOverlayPanel] battleCanvas=(%d,%d,800,600) panel=(%d,%d,%d,%d) baseY=%d cfgY=%d",
-                battle_x, battle_y, x, y, panel_w, panel_h, RP_BASE_Y_OFFSET, cfg.ranged_panel_y);
-        }
 
         int pad_x = 16;
         int mid_gap = 16;
@@ -1219,6 +1001,8 @@ public:
             if (screen && screen->buffer) {
                 ClearScreenRegion(screen, x, y, draw_w, draw_h);
             }
+        } else {
+            return;
         }
 
         unsigned int checksum = 0;
@@ -1250,6 +1034,7 @@ private:
     void ResetRuntimeState()
     {
         bg_ = nullptr;
+        bg_load_failed_ = false;
         saved_under_ = nullptr;
         last_dlg_ = nullptr;
         last_mgr_ = nullptr;
@@ -1260,8 +1045,6 @@ private:
         last_y_ = -1;
         last_w_ = 0;
         last_h_ = 0;
-        battle_area_logged_ = false;
-        diag_draw_count_ = 0;
         dirty_ = true;
         stack_checksum_ = 0;
         ResetText();
@@ -1275,7 +1058,7 @@ private:
 
     void EnsureBackground()
     {
-        if (!bg_) {
+        if (!bg_ && !bg_load_failed_) {
             char modulePath[MAX_PATH];
             GetModuleFileNameA(g_hModule, modulePath, MAX_PATH);
             char* slash = strrchr(modulePath, '\\');
@@ -1284,6 +1067,7 @@ private:
             _snprintf(path, sizeof(path) - 1, "%simg\\%s", modulePath, cfg.ranged_panel_image);
             path[sizeof(path) - 1] = 0;
             bg_ = CreateDDBackground(path);
+            bg_load_failed_ = (bg_ == nullptr);
         }
     }
 
@@ -1291,6 +1075,7 @@ private:
     {
         DestroyDDBackground(bg_);
         bg_ = nullptr;
+        bg_load_failed_ = false;
     }
 
     void ReleaseUnderlay()
@@ -1309,7 +1094,9 @@ private:
         }
         saved_under_ = CreateEmptyDDSurface(w, h);
         if (saved_under_) {
-            CopyBackBufferToSurface(saved_under_, x, y, w, h);
+            if (!CopyBackBufferToSurface(saved_under_, x, y, w, h)) {
+                ReleaseUnderlay();
+            }
         }
     }
 
@@ -1324,10 +1111,9 @@ private:
     void SuppressForResult(const char* reason, _BattleMgr_* mgr, _Dlg_* active_dlg)
     {
         bool was_active = active_;
-        if (!suppressed_for_result_ || active_) {
-            WriteLog("[RangedOverlayPanel] suppressed reason=%s mgr=%p battleDlg=%p activeDlg=%p",
-                reason ? reason : "unknown", mgr, last_dlg_, active_dlg);
-        }
+        (void)reason;
+        (void)mgr;
+        (void)active_dlg;
         active_ = false;
         suppressed_for_result_ = true;
         if (was_active) RestoreUnderlay();
@@ -1341,10 +1127,16 @@ private:
 
         unsigned int checksum = 0;
         if (!SafeComputeStackChecksum(mgr, &checksum)) return;
-        stack_checksum_ = checksum;
 
-        int ranged[2] = { SafeCalcRangedUnitsPower(mgr, 0), SafeCalcRangedUnitsPower(mgr, 1) };
-        int spell[2] = { SafeCalcHeroSpellPower(mgr, 0), SafeCalcHeroSpellPower(mgr, 1) };
+        int ranged[2] = { 0, 0 };
+        int spell[2] = { 0, 0 };
+        if (!SafeCalcRangedUnitsPower(mgr, 0, &ranged[0]) ||
+            !SafeCalcRangedUnitsPower(mgr, 1, &ranged[1]) ||
+            !SafeCalcHeroSpellPower(mgr, 0, &spell[0]) ||
+            !SafeCalcHeroSpellPower(mgr, 1, &spell[1])) {
+            return;
+        }
+        stack_checksum_ = checksum;
         int total[2] = { ranged[0] + spell[0], ranged[1] + spell[1] };
 
         _snprintf(text_[0], sizeof(text_[0]) - 1, "%d", ranged[0]);
@@ -1356,37 +1148,11 @@ private:
         for (int i = 0; i < 6; ++i) text_[i][sizeof(text_[i]) - 1] = 0;
 
         dirty_ = false;
-        WriteLog("[RangedOverlayPanel] recalculated reason=%s checksum=%u ranged=(%d,%d) spell=(%d,%d) total=(%d,%d)",
-            reason ? reason : "unknown", checksum, ranged[0], ranged[1], spell[0], spell[1], total[0], total[1]);
-
-        // 每次新战斗打印双面栈摘要
-        static uint32_t s_last_checksum = 0;
-        if (s_last_checksum != checksum || !text_[0][0]) {
-            s_last_checksum = checksum;
-            for (int side = 0; side < 2; ++side) {
-                _Hero_* h = mgr->hero[side];
-                WriteLog("[StackDiag] side=%d hero=%p", side, h);
-                if (h && (uint32_t)h > 0x00400000 && (uint32_t)h < 0x20000000) {
-                    WriteLog("[StackDiag] hero power=%d knowledge=%d spellBookSlot=%d",
-                        (int)((unsigned char*)h)[0x478],
-                        (int)((unsigned char*)h)[0x479],
-                        h->doll_art[17].id);
-                }
-                for (int slot = 0; slot < 21; ++slot) {
-                    _BattleStack_* s = &mgr->stack[side][slot];
-                    if (s->count_current > 0) {
-                        WriteLog("[StackDiag] side=%d slot=%d creature_id=%d count=%d shots=%d atk=%d def=%d dmg=%d~%d hp=%d",
-                            side, slot, s->creature_id, s->count_current, s->creature.shots,
-                            s->creature.attack, s->creature.defence,
-                            s->creature.damage_min, s->creature.damage_max,
-                            s->creature.hit_points);
-                    }
-                }
-            }
-        }
+        (void)reason;
     }
 
     DDBackgroundSurface* bg_;
+    bool bg_load_failed_;
     DDBackgroundSurface* saved_under_;
     _Dlg_* last_dlg_;
     _BattleMgr_* last_mgr_;
@@ -1397,19 +1163,12 @@ private:
     int last_y_;
     int last_w_;
     int last_h_;
-    bool battle_area_logged_;
-    int diag_draw_count_;
     bool dirty_;
     unsigned int stack_checksum_;
     char text_[6][64];
 };
 
 static RangedOverlayPanel s_ranged_overlay_panel;
-
-static void DestroyRangedPanel()
-{
-    s_ranged_overlay_panel.Destroy();
-}
 
 static _Fnt_* GetRangedPanelTextFont()
 {
@@ -1441,60 +1200,7 @@ static void UpdateRangedPanel(_BattleMgr_* mgr)
 
 int __stdcall Hook_BattleRedraw(HiHook* h, _BattleMgr_* hook_mgr, _bool8_ flip, _bool8_ set_battle_redraws, _bool8_ use_battle_redraws, int waiting_time, _bool8_ redraw_background, _bool8_ wait)
 {
-    // hook_mgr IS the combatManager (vtable 0x63D3E8 confirms).
-    // mainWindow at +0x132FC may be 0x0E (uninitialized in HD Mod hook chain).
     _BattleMgr_* mgr = hook_mgr;
-    static int s_call_count = 0;
-    static int s_valid_dlg_count = 0;
-    ++s_call_count;
-    _Dlg_* cur_dlg = nullptr;
-    // Try combatManager::mainWindow first
-    if (mgr && (uint32_t)mgr->dlg > 0x10000) cur_dlg = mgr->dlg;
-    // Fallback: gpWindowManager->activeWindow (+0x50)
-    if (!cur_dlg) {
-        char* wndMgr = (char*)*(uint32_t*)0x6992D0;
-        if (wndMgr) {
-            uint32_t aw = *(uint32_t*)(wndMgr + 0x50);
-            if (aw >= 0x01000000 && aw <= 0x20000000) cur_dlg = (_Dlg_*)aw;
-        }
-    }
-    if (cur_dlg) {
-        ++s_valid_dlg_count;
-        if (s_valid_dlg_count <= 5) {
-            WriteLog("[Diag] Hook_BattleRedraw call#%d valid#%d mgr=%p dlg=%p", s_call_count, s_valid_dlg_count, mgr, cur_dlg);
-        }
-    } else if (s_call_count <= 3 || (s_call_count % 500) == 0) {
-        WriteLog("[Diag] Hook_BattleRedraw call#%d mgr=%p dlg=0x%X", s_call_count, mgr, mgr ? (uint32_t)mgr->dlg : 0);
-        // Scan wrapper for heroWindow candidates
-        if (mgr && (s_call_count == 1 || s_call_count == 100)) {
-            WriteLog("[Diag] Pointer dump #%d of mgr=%p...", s_call_count, mgr);
-            uint32_t dlg_val = *(uint32_t*)((char*)mgr + 0x132FC);
-            WriteLog("[Diag]   mgr+0x132FC (mainWindow) = 0x%08X", dlg_val);
-            for (int off = 0; off < 0x140F0; off += 4) {
-                uint32_t v = *(uint32_t*)((char*)mgr + off);
-                if (v >= 0x01000000 && v <= 0x20000000) {
-                    // Check if readable and get rect info
-                    const char* note = "";
-                    if (!IsBadReadPtr((void*)(v + 0x28), 4)) {
-                        int32_t dx = *(int32_t*)((char*)v + 0x18);
-                        int32_t dy = *(int32_t*)((char*)v + 0x1C);
-                        int32_t dw = *(int32_t*)((char*)v + 0x20);
-                        int32_t dh = *(int32_t*)((char*)v + 0x24);
-                        if (dx >= 0 && dx < 4000 && dy >= 0 && dy < 4000 && dw > 50 && dw < 4000 && dh > 50 && dh < 4000) {
-                            WriteLog("[Diag]   mgr+0x%X = 0x%08X rect=(%d,%d,%d,%d) ***WINDOW***", off, v, dx, dy, dw, dh);
-                        }
-                    }
-                }
-            }
-            // Also specifically log +0x132FC
-            uint32_t mw_val = *(uint32_t*)((char*)mgr + 0x132FC);
-            WriteLog("[Diag]   mgr+0x132FC (mainWindow) = 0x%08X", mw_val);
-            // And +0x38 (seen as 0x1EC20398 earlier)
-            uint32_t v38 = *(uint32_t*)((char*)mgr + 0x38);
-            WriteLog("[Diag]   mgr+0x38 = 0x%08X", v38);
-            WriteLog("[Diag] scan complete");
-        }
-    }
     THISCALL_7(void, h->GetDefaultFunc(), hook_mgr, flip, set_battle_redraws, use_battle_redraws, waiting_time, redraw_background, wait);
     UpdateRangedPanel(mgr);
     return 0;
@@ -1515,14 +1221,4 @@ int __stdcall Hook_CombatCastSpell(HiHook* h, _BattleMgr_* mgr, int x, int y)
     MarkRangedPanelDirty("spell cast");
     return 0;
 }
-
-// FUN_004746B0：战斗行动处理主函数，覆盖人类/电脑 stack 行动后的状态变化。
-// 返回后置脏；绘制时只在 dirty=true 时重算，不会每帧完整重算。
-int __stdcall Hook_CombatActionHandler(HiHook* h, _BattleMgr_* mgr, int msg)
-{
-    int result = THISCALL_2(int, h->GetDefaultFunc(), mgr, msg);
-    MarkRangedPanelDirty("stack action");
-    return result;
-}
-
 

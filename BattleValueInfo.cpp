@@ -12,10 +12,6 @@
 
 using namespace h3;
 
-#define STB_IMAGE_IMPLEMENTATION
-#define STBI_NO_STDIO
-#include "deps/stb_image.h"
-
 Patcher*         _P  = nullptr;
 PatcherInstance* _PI = nullptr;
 

@@ -2,11 +2,10 @@ static void StartPlugin()
 {
     WriteLog("BattleValueInfo 开始注册 Hook。");
 
-    // 仅插入战斗价值行；窗口尺寸、背景、按钮、描述区由 MegaDesc 负责。
+    // 生物信息窗口：只在 BUILD 阶段直接画战斗价值文字，不插入控件、不注册全局 DefProc/Redraw。
     _PI->WriteLoHook(0x5F4503, Hook_BuildCombat);
     _PI->WriteLoHook(0x5F3E75, Hook_BuildAdventure);
     _PI->WriteLoHook(0x5F491E, Hook_BuildTown);
-    _PI->WriteHiHook(0x41B120, SPLICE_, EXTENDED_, THISCALL_, Hook_DlgDefProc);
 
     // 战场顶部常驻远程输出面板。
     _PI->WriteHiHook(0x493FC0, SPLICE_, EXTENDED_, THISCALL_, Hook_BattleRedraw);
@@ -15,7 +14,7 @@ static void StartPlugin()
     _PI->WriteHiHook(0x4781C0, SPLICE_, EXTENDED_, THISCALL_, Hook_CombatStartBattle);
     _PI->WriteHiHook(0x464F10, SPLICE_, EXTENDED_, THISCALL_, Hook_CombatCastSpell);
 
-    WriteLog("BattleValueInfo 已启用。Hook：FightValue(4), RangedPanel(1), RangedPanelEvents(2)。");
+    WriteLog("BattleValueInfo 已启用。Hook：FightValue(3), RangedPanel(1), RangedPanelEvents(2)。");
 }
 
 // ========== DllMain ==========
