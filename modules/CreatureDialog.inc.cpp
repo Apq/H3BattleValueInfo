@@ -1068,10 +1068,19 @@ public:
             SuppressForResult("hidden battle", mgr, active_dlg);
             return;
         }
-
-        // 从结果界面返回手动战斗（第二次重打）：结果框消失后恢复面板
-        if (suppressed_for_result_ && manual_battle_started_ && active_dlg == nullptr) {
-            WriteLog("[RangedOverlayPanel] re-armed after result dismiss mgr=%p", mgr);
+        // 任何弹出对话框覆盖战场时，不画面板（避免残留）
+        if (active_dlg != nullptr && active_dlg != dlg) {
+            if (active_) {
+                active_ = false;
+                ReleaseBackground();
+            }
+            return;
+        }
+        // 从对话框/结果界面返回：恢复面板（含第二次重打）
+        if (!active_ && manual_battle_started_ && (active_dlg == nullptr || active_dlg == dlg)) {
+            if (suppressed_for_result_) {
+                WriteLog("[RangedOverlayPanel] re-armed after result dismiss mgr=%p", mgr);
+            }
             active_ = true;
             suppressed_for_result_ = false;
             battle_area_logged_ = false;
@@ -1200,35 +1209,20 @@ private:
 
     void SuppressForResult(const char* reason, _BattleMgr_* mgr, _Dlg_* active_dlg)
     {
-        bool was_active = active_;
         if (!suppressed_for_result_ || active_) {
             WriteLog("[RangedOverlayPanel] suppressed reason=%s mgr=%p battleDlg=%p activeDlg=%p",
                 reason ? reason : "unknown", mgr, last_dlg_, active_dlg);
-        }
-        // 先清除面板区域像素
-        if (was_active && last_x_ >= 0 && last_w_ > 0 && last_h_ > 0) {
-            ClearPanelArea();
         }
         active_ = false;
         suppressed_for_result_ = true;
         ReleaseBackground();
         ResetText();
-        last_x_ = -1;
-        last_y_ = -1;
-        last_w_ = 0;
-        last_h_ = 0;
     }
 
     void ClearPanelArea()
     {
-        // 用 DD backbuffer 的 Blt ColorFill 清除面板区域
-        if (!o_DDSurfaceBackBuffer) return;
-        DDBLTFX bltfx;
-        memset(&bltfx, 0, sizeof(bltfx));
-        bltfx.dwSize = sizeof(bltfx);
-        bltfx.dwFillColor = 0; // 黑色
-        RECT dst = { last_x_, last_y_, last_x_ + last_w_, last_y_ + last_h_ };
-        o_DDSurfaceBackBuffer->Blt(&dst, nullptr, nullptr, DDBLT_COLORFILL | DDBLT_WAIT, &bltfx);
+        // 已弃用：ColorFill会在结果界面背景上留下黑块
+        // 结果界面是全屏对话框，会自然覆盖面板残留
     }
 
     void Recalculate(_BattleMgr_* mgr, const char* reason)
