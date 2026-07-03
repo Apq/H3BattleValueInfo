@@ -166,42 +166,51 @@ static bool IsMegaDescLoaded()
 
 static void TryAddFightValueLine(_Dlg_* dlg)
 {
-    // 临时禁用：插入控件导致对话框关闭时控件链表损坏崩溃
+    // 彻底禁用：AddItemToOwnArrayList 在当前 MegaDesc 版本上崩溃
     return;
     if (!IsMegaDescLoaded()) return;
     if (!dlg || dlg->width != 298 || !FindDlgItem(dlg, 200)) return;
+    // 已插入过则跳过
+    if (FindDlgItem(dlg, 3009) || FindDlgItem(dlg, 3008)) return;
 
-    int creature_id = *(int*)((char*)dlg + 0x60);
-    int single_fv = GetCreatureFightValueById(creature_id);
-    char* count_item = FindDlgItem(dlg, 204);
-    const char* count_text = count_item ? *(_char_**)(count_item + 0x34) : nullptr;
-    int count = ParseFirstPositiveInt(count_text);
-    int current_value = GetCurrentStackFightValueEstimate(creature_id, count, single_fv);
+    __try {
+        int creature_id = *(int*)((char*)dlg + 0x60);
+        int single_fv = GetCreatureFightValueById(creature_id);
+        char* count_item = FindDlgItem(dlg, 204);
+        const char* count_text = count_item ? *(_char_**)(count_item + 0x34) : nullptr;
+        int count = ParseFirstPositiveInt(count_text);
+        int current_value = GetCurrentStackFightValueEstimate(creature_id, count, single_fv);
 
-    AddFightValueLine(dlg, single_fv, current_value);
+        AddFightValueLine(dlg, single_fv, current_value);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        WriteLog("[FightValue] SEH exception during TryAddFightValueLine dlg=%p", dlg);
+    }
 }
 
 // BUILD 阶段 hook：窗口构建完成后插入战斗价值行。
 int __stdcall Hook_BuildCombat(LoHook* h, HookContext* c)
 {
+    WriteLog("[BuildCombat] dlg=%p ebx", c->ebx);
     TryAddFightValueLine((_Dlg_*)c->ebx);
     return EXEC_DEFAULT;
 }
 int __stdcall Hook_BuildAdventure(LoHook* h, HookContext* c)
 {
+    WriteLog("[BuildAdventure] dlg=%p esi", c->esi);
     TryAddFightValueLine((_Dlg_*)c->esi);
     return EXEC_DEFAULT;
 }
 int __stdcall Hook_BuildTown(LoHook* h, HookContext* c)
 {
+    WriteLog("[BuildTown] dlg=%p esi", c->esi);
     TryAddFightValueLine((_Dlg_*)c->esi);
     return EXEC_DEFAULT;
 }
 
-// DefProc 兜底：如果 BUILD 阶段未命中，则在消息处理时补插一次。
+// DefProc 兜底：仅诊断，不插入控件
 int __stdcall Hook_DlgDefProc(HiHook* h, _Dlg_* dlg, _EventMsg_* msg)
 {
-    if (o_BattleMgr && s_diag_dlgdefproc_count < 80) {
+    if (o_BattleMgr && s_diag_dlgdefproc_count < 20) {
         ++s_diag_dlgdefproc_count;
         WriteLog("[Diag] DlgDefProc #%d dlg=%p rect=(%d,%d,%d,%d) currentDlg=%p battleDlg=%p msg=(%d,%d,%d)",
             s_diag_dlgdefproc_count, dlg,
@@ -209,10 +218,6 @@ int __stdcall Hook_DlgDefProc(HiHook* h, _Dlg_* dlg, _EventMsg_* msg)
             o_CurrentDlg, o_BattleMgr ? o_BattleMgr->dlg : nullptr,
             msg ? msg->command : -1, msg ? msg->subtype : -1, msg ? msg->itemId : -1);
     }
-    if (o_BattleMgr && o_BattleMgr->dlg && dlg && dlg != o_BattleMgr->dlg) {
-        WriteLog("[Diag] non-battle dlg while battle active: dlg=%p battleDlg=%p", dlg, o_BattleMgr->dlg);
-    }
-    TryAddFightValueLine(dlg);
     return THISCALL_2(int, h->GetDefaultFunc(), dlg, msg);
 }
 
