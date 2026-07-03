@@ -806,6 +806,31 @@ struct DDBackgroundSurface
     int height;
 };
 
+static DDBackgroundSurface* CreateEmptyDDSurface(int w, int h)
+{
+    if (w <= 0 || h <= 0 || !o_DD) return nullptr;
+    DDSURFACEDESC ddsd;
+    memset(&ddsd, 0, sizeof(ddsd));
+    ddsd.dwSize = sizeof(ddsd);
+    ddsd.dwFlags = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT;
+    ddsd.ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN;
+    ddsd.dwWidth = w;
+    ddsd.dwHeight = h;
+
+    LPDIRECTDRAWSURFACE surf = nullptr;
+    HRESULT hr = o_DD->CreateSurface(&ddsd, &surf, nullptr);
+    if (FAILED(hr) || !surf) {
+        WriteLog("[DDBackground] Create empty surface failed hr=0x%08X w=%d h=%d", hr, w, h);
+        return nullptr;
+    }
+
+    DDBackgroundSurface* bg = new DDBackgroundSurface();
+    bg->dd_surface = surf;
+    bg->width = w;
+    bg->height = h;
+    return bg;
+}
+
 static DDBackgroundSurface* CreateDDBackground(const char* pcx_path)
 {
     // 解码 PCX
@@ -962,6 +987,42 @@ static void DrawDDBackground(DDBackgroundSurface* bg, int dst_x, int dst_y, int 
     }
 }
 
+static bool CopyBackBufferToSurface(DDBackgroundSurface* dst, int src_x, int src_y, int w, int h)
+{
+    if (!dst || !dst->dd_surface || !o_DDSurfaceBackBuffer || w <= 0 || h <= 0) return false;
+    __try {
+        RECT src_rect = { src_x, src_y, src_x + w, src_y + h };
+        RECT dst_rect = { 0, 0, w, h };
+        HRESULT hr = dst->dd_surface->Blt(&dst_rect, o_DDSurfaceBackBuffer, &src_rect, DDBLT_WAIT, nullptr);
+        if (FAILED(hr)) {
+            WriteLog("[DDBackground] Save underlay failed hr=0x%08X", hr);
+            return false;
+        }
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        WriteLog("[DDBackground] SEH exception during save underlay rect=(%d,%d,%d,%d)", src_x, src_y, w, h);
+        return false;
+    }
+}
+
+static bool RestoreSurfaceToBackBuffer(DDBackgroundSurface* src, int dst_x, int dst_y, int w, int h)
+{
+    if (!src || !src->dd_surface || !o_DDSurfaceBackBuffer || w <= 0 || h <= 0) return false;
+    __try {
+        RECT src_rect = { 0, 0, w, h };
+        RECT dst_rect = { dst_x, dst_y, dst_x + w, dst_y + h };
+        HRESULT hr = o_DDSurfaceBackBuffer->Blt(&dst_rect, src->dd_surface, &src_rect, DDBLT_WAIT, nullptr);
+        if (FAILED(hr)) {
+            WriteLog("[DDBackground] Restore underlay failed hr=0x%08X", hr);
+            return false;
+        }
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        WriteLog("[DDBackground] SEH exception during restore underlay rect=(%d,%d,%d,%d)", dst_x, dst_y, w, h);
+        return false;
+    }
+}
+
 static void SafeDrawText(_Fnt_* font, _Pcx16_* screen, const char* text, int x, int y, int w, int h, int color, int align)
 {
     if (!font || !screen || !text) return;
@@ -1004,6 +1065,7 @@ public:
         active_ = false;
         manual_battle_started_ = false;
         suppressed_for_result_ = false;
+        RestoreUnderlay();
         ReleaseBackground();
         ResetText();
         if (o_BattleMgr) o_BattleMgr->RedrawBattlefield(FALSE, TRUE, FALSE, 0, TRUE, FALSE);
@@ -1055,8 +1117,6 @@ public:
             ReleaseBackground();
             MarkDirty("new battle dialog");
         }
-
-        if (suppressing_) return; // 重入保护：suppress触发的重绘不再检测
 
         if (IsReplayableQuickBattleResultDlg(active_dlg)) {
             SuppressForResult("replayable quick battle result", mgr, active_dlg);
@@ -1121,6 +1181,7 @@ public:
         if (bg_) {
             int draw_w = (bg_->width < panel_w) ? bg_->width : panel_w;
             int draw_h = (bg_->height < panel_h) ? bg_->height : panel_h;
+            SaveUnderlay(x, y, draw_w, draw_h);
             last_x_ = x;
             last_y_ = y;
             last_w_ = draw_w;
@@ -1157,6 +1218,7 @@ private:
     void ResetRuntimeState()
     {
         bg_ = nullptr;
+        saved_under_ = nullptr;
         last_dlg_ = nullptr;
         last_mgr_ = nullptr;
         active_ = false;
@@ -1169,7 +1231,6 @@ private:
         battle_area_logged_ = false;
         diag_draw_count_ = 0;
         dirty_ = true;
-        suppressing_ = false;
         stack_checksum_ = 0;
         ResetText();
     }
@@ -1200,6 +1261,34 @@ private:
         bg_ = nullptr;
     }
 
+    void ReleaseUnderlay()
+    {
+        DestroyDDBackground(saved_under_);
+        saved_under_ = nullptr;
+    }
+
+    void SaveUnderlay(int x, int y, int w, int h)
+    {
+        if (saved_under_ && last_x_ == x && last_y_ == y && last_w_ == w && last_h_ == h) {
+            return; // 已经保存过原始像素，避免把面板自身保存进去
+        }
+        if (saved_under_) {
+            RestoreUnderlay();
+        }
+        saved_under_ = CreateEmptyDDSurface(w, h);
+        if (saved_under_) {
+            CopyBackBufferToSurface(saved_under_, x, y, w, h);
+        }
+    }
+
+    void RestoreUnderlay()
+    {
+        if (saved_under_ && last_x_ >= 0 && last_y_ >= 0 && last_w_ > 0 && last_h_ > 0) {
+            RestoreSurfaceToBackBuffer(saved_under_, last_x_, last_y_, last_w_, last_h_);
+        }
+        ReleaseUnderlay();
+    }
+
     void SuppressForResult(const char* reason, _BattleMgr_* mgr, _Dlg_* active_dlg)
     {
         bool was_active = active_;
@@ -1209,14 +1298,9 @@ private:
         }
         active_ = false;
         suppressed_for_result_ = true;
+        if (was_active) RestoreUnderlay();
         ReleaseBackground();
         ResetText();
-        // suppress时触发一次战场重绘，让游戏重画战场背景（不含面板）
-        if (was_active && mgr && !suppressing_) {
-            suppressing_ = true;
-            THISCALL_7(void, 0x493FC0, mgr, FALSE, TRUE, FALSE, 0, TRUE, FALSE);
-            suppressing_ = false;
-        }
     }
 
     void Recalculate(_BattleMgr_* mgr, const char* reason)
@@ -1271,6 +1355,7 @@ private:
     }
 
     DDBackgroundSurface* bg_;
+    DDBackgroundSurface* saved_under_;
     _Dlg_* last_dlg_;
     _BattleMgr_* last_mgr_;
     bool active_;
@@ -1283,7 +1368,6 @@ private:
     bool battle_area_logged_;
     int diag_draw_count_;
     bool dirty_;
-    bool suppressing_;
     unsigned int stack_checksum_;
     char text_[6][64];
 };
