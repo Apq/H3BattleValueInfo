@@ -1033,6 +1033,29 @@ static void SafeDrawText(_Fnt_* font, _Pcx16_* screen, const char* text, int x, 
     }
 }
 
+static void ClearScreenRegion(_Pcx16_* screen, int x, int y, int w, int h)
+{
+    if (!screen || !screen->buffer || w <= 0 || h <= 0) return;
+    __try {
+        int sw = screen->width;
+        int sh = screen->height;
+        if (x < 0) { w += x; x = 0; }
+        if (y < 0) { h += y; y = 0; }
+        if (x + w > sw) w = sw - x;
+        if (y + h > sh) h = sh - y;
+        if (w <= 0 || h <= 0) return;
+        // 填充透明色（0），清除旧文字残留
+        for (int row = 0; row < h; ++row) {
+            unsigned short* p = (unsigned short*)screen->buffer + (y + row) * sw + x;
+            for (int col = 0; col < w; ++col) {
+                p[col] = 0;
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        WriteLog("[RangedOverlayPanel] SEH exception during ClearScreenRegion rect=(%d,%d,%d,%d)", x, y, w, h);
+    }
+}
+
 
 class RangedOverlayPanel
 {
@@ -1187,6 +1210,10 @@ public:
             last_w_ = draw_w;
             last_h_ = draw_h;
             DrawDDBackground(bg_, x, y, draw_w, draw_h);
+            // 同步清除 screen_pcx16 面板区域的旧文字，避免多帧叠加
+            if (screen && screen->buffer) {
+                ClearScreenRegion(screen, x, y, draw_w, draw_h);
+            }
         }
 
         unsigned int checksum = 0;
