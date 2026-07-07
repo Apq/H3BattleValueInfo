@@ -494,22 +494,14 @@ static const _dword_ TEXT_MASK_SENTINEL_8888 = 0xFFFF00FF;
 static bool EnsureTextMask(_Pcx16_** mask, int w, int h)
 {
     if (!mask || w <= 0 || h <= 0) {
-        static int s_warn2 = 0;
-        if (s_warn2 < 3) { ++s_warn2; WriteLog("[EnsureTextMask] bad params mask=%p w=%d h=%d", mask, w, h); }
         return false;
     }
     if (*mask && (*mask)->width == w && (*mask)->height == h && (*mask)->buffer) return true;
     if (*mask) {
-        WriteLog("[EnsureTextMask] recreate mask=%p old=%dx%d new=%dx%d", *mask, (*mask)->width, (*mask)->height, w, h);
         (*mask)->Destroy();
         *mask = nullptr;
     }
     *mask = _Pcx16_::Create(w, h);
-    static int s_created = 0;
-    if (*mask) ++s_created;
-    if (s_created <= 5 || !*mask || !(*mask)->buffer) {
-        WriteLog("[EnsureTextMask] Create w=%d h=%d result=%p buffer=%p", w, h, *mask, (*mask) ? (*mask)->buffer : nullptr);
-    }
     return *mask && (*mask)->buffer;
 }
 
@@ -999,32 +991,7 @@ public:
 
         // 2. 画文字到 text_mask_，再用 backbuffer 方式画到屏幕。
         _Fnt_* font = GetRangedPanelTextFont();
-        static int s_text_warn = 0;
-        if (s_text_warn < 5) {
-            ++s_text_warn;
-            WriteLog("[DrawText] font=%p text_mask_=%p ranged=%d total=%d",
-                font, text_mask_, ranged_value_[0], total_value_[0]);
-        }
         if (font && EnsureTextMask(&text_mask_, panel_w, panel_h)) {
-            FillPcx16Mask(text_mask_);
-            char diag[128];
-            _snprintf(diag, sizeof(diag) - 1, "F=%u R=%d", debug_draw_seq_ + 1, ranged_value_[0]);
-            diag[sizeof(diag) - 1] = 0;
-            SafeDrawTextToScreen(font, text_mask_, diag,
-                4, 4, panel_w - 8, text_h,
-                5, 0);
-
-            _snprintf(diag, sizeof(diag) - 1, "T=%d S=%d", total_value_[0], spell_value_[0]);
-            diag[sizeof(diag) - 1] = 0;
-            SafeDrawTextToScreen(font, text_mask_, diag,
-                4, 26, panel_w - 8, text_h,
-                6, 0);
-
-            int bar_w = (debug_draw_seq_ * 7) % (panel_w - 8);
-            if (bar_w < 4) bar_w = 4;
-            __try {
-                text_mask_->FillRectangle(4, panel_h - 10, bar_w, 6, 0, 255, 0);
-            } __except (EXCEPTION_EXECUTE_HANDLER) {}
             // 使用 backbuffer 方式画文字（跳过透明像素）
             DrawPcx16ToBackBuffer(text_mask_, x, y, true);
         }
@@ -1052,15 +1019,6 @@ private:
         spell_value_[1] = 0;
         total_value_[0] = 0;
         total_value_[1] = 0;
-        debug_draw_seq_ = 0;
-        debug_last_ranged_[0] = -1;
-        debug_last_ranged_[1] = -1;
-        debug_last_spell_[0] = -1;
-        debug_last_spell_[1] = -1;
-        debug_last_total_[0] = -1;
-        debug_last_total_[1] = -1;
-        debug_last_summary_[0][0] = 0;
-        debug_last_summary_[1][0] = 0;
         ResetText();
     }
 
@@ -1110,29 +1068,6 @@ private:
         unsigned int checksum = 0;
         if (!SafeComputeStackChecksum(mgr, &checksum)) return;
 
-        // 诊断：每帧打印 checksum 和 count_current
-        static int s_diag_frame = 0;
-        ++s_diag_frame;
-        if (s_diag_frame <= 60 || checksum != stack_checksum_ || dirty_) {
-            // 打印 side0 第一个存活的 stack 的 count_current
-            int cnt0 = 0, cnt1 = 0;
-            for (int slot = 0; slot < 21; ++slot) {
-                if (mgr->stack[0][slot].count_current > 0) {
-                    cnt0 = mgr->stack[0][slot].count_current;
-                    break;
-                }
-            }
-            for (int slot = 0; slot < 21; ++slot) {
-                if (mgr->stack[1][slot].count_current > 0) {
-                    cnt1 = mgr->stack[1][slot].count_current;
-                    break;
-                }
-            }
-            bool will_recalc = (checksum != stack_checksum_ || dirty_);
-            WriteLog("[Recalc] frame=%d checksum=0x%08X->0x%08X dirty=%d will=%d cnt0=%d cnt1=%d ranged=%d/%d",
-                s_diag_frame, stack_checksum_, checksum, dirty_, will_recalc, cnt0, cnt1, ranged_value_[0], ranged_value_[1]);
-        }
-
         // 如果 checksum 没变且不是 dirty，跳过重算
         if (checksum == stack_checksum_ && !dirty_) return;
 
@@ -1147,10 +1082,6 @@ private:
 
         stack_checksum_ = checksum;
         int total[2] = { ranged[0] + spell[0], ranged[1] + spell[1] };
-
-        // 诊断：打印计算结果
-        WriteLog("[Panel] RECALC ranged=%d/%d spell=%d/%d total=%d/%d (checksum=0x%08X)",
-            ranged[0], ranged[1], spell[0], spell[1], total[0], total[1], checksum);
 
         ranged_value_[0] = ranged[0];
         ranged_value_[1] = ranged[1];
@@ -1172,44 +1103,7 @@ private:
 
     void MaybeLogDraw(_BattleMgr_* mgr)
     {
-        ++debug_draw_seq_;
-
-        char summary0[768];
-        char summary1[768];
-        BuildRangedSideSummary(mgr, 0, summary0, sizeof(summary0));
-        BuildRangedSideSummary(mgr, 1, summary1, sizeof(summary1));
-
-        bool value_changed =
-            ranged_value_[0] != debug_last_ranged_[0] ||
-            ranged_value_[1] != debug_last_ranged_[1] ||
-            spell_value_[0] != debug_last_spell_[0] ||
-            spell_value_[1] != debug_last_spell_[1] ||
-            total_value_[0] != debug_last_total_[0] ||
-            total_value_[1] != debug_last_total_[1];
-
-        bool summary_changed =
-            strcmp(summary0, debug_last_summary_[0]) != 0 ||
-            strcmp(summary1, debug_last_summary_[1]) != 0;
-
-        if (debug_draw_seq_ <= 8 || value_changed || summary_changed) {
-            WriteLog("[Diag] draw=%u checksum=0x%08X ranged=%d/%d spell=%d/%d total=%d/%d",
-                debug_draw_seq_, stack_checksum_,
-                ranged_value_[0], ranged_value_[1], spell_value_[0], spell_value_[1],
-                total_value_[0], total_value_[1]);
-            WriteLog("[Diag] side0 %s", summary0);
-            WriteLog("[Diag] side1 %s", summary1);
-
-            debug_last_ranged_[0] = ranged_value_[0];
-            debug_last_ranged_[1] = ranged_value_[1];
-            debug_last_spell_[0] = spell_value_[0];
-            debug_last_spell_[1] = spell_value_[1];
-            debug_last_total_[0] = total_value_[0];
-            debug_last_total_[1] = total_value_[1];
-            strncpy(debug_last_summary_[0], summary0, sizeof(debug_last_summary_[0]) - 1);
-            strncpy(debug_last_summary_[1], summary1, sizeof(debug_last_summary_[1]) - 1);
-            debug_last_summary_[0][sizeof(debug_last_summary_[0]) - 1] = 0;
-            debug_last_summary_[1][sizeof(debug_last_summary_[1]) - 1] = 0;
-        }
+        (void)mgr;
     }
 
     _Pcx16_* bg_;
@@ -1228,11 +1122,6 @@ private:
     int ranged_value_[2];
     int spell_value_[2];
     int total_value_[2];
-    unsigned int debug_draw_seq_;
-    int debug_last_ranged_[2];
-    int debug_last_spell_[2];
-    int debug_last_total_[2];
-    char debug_last_summary_[2][768];
 
 public:
     // 诊断用 getter
@@ -1294,28 +1183,6 @@ int __stdcall Hook_AfterBlt(LoHook* h, HookContext* c)
     return EXEC_DEFAULT;
 }
 
-static bool ShouldProbeRenderPath()
-{
-    return s_ranged_overlay_panel.Active() && o_BattleMgr != nullptr;
-}
-
-static void ProbeRenderPath(const char* name, HookContext* c, int* counter)
-{
-    if (!counter || !ShouldProbeRenderPath()) return;
-    if (*counter >= 32) return;
-    ++(*counter);
-    int a1 = 0, a2 = 0, a3 = 0, a4 = 0;
-    __try {
-        a1 = c->Arg(1);
-        a2 = c->Arg(2);
-        a3 = c->Arg(3);
-        a4 = c->Arg(4);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {}
-    WriteLog("[RenderProbe] %s #%d ret=%08X eax=%08X ecx=%08X edx=%08X ebx=%08X esi=%08X edi=%08X arg=%08X,%08X,%08X,%08X",
-        name, *counter, c->return_address, c->eax, c->ecx, c->edx, c->ebx, c->esi, c->edi,
-        a1, a2, a3, a4);
-}
-
 // Hook_CycleCombatScreen @ 0x495C50：战斗动画循环，每帧调用 Refresh()。
 // 这是比 0x493FC0 更内层的渲染点，CombatAnimation 插件也使用这个点。
 int __stdcall Hook_CycleCombatScreen(HiHook* h, _BattleMgr_* mgr)
@@ -1336,48 +1203,7 @@ int __stdcall Hook_CombatStartBattle(HiHook* h, _BattleMgr_* mgr)
 // Hook_CombatCastSpell：战斗内施法后标记面板脏，等待下一帧重算。
 int __stdcall Hook_CombatCastSpell(HiHook* h, _BattleMgr_* mgr, int x, int y)
 {
-    static int s_cast_count = 0;
-    ++s_cast_count;
-
-    // 诊断：读取施法前后 count_current
-    int before_cnt0 = 0, before_cnt1 = 0, before_spell0 = 0;
-    if (mgr) {
-        for (int slot = 0; slot < 21; ++slot) {
-            if (mgr->stack[0][slot].count_current > 0) { before_cnt0 = mgr->stack[0][slot].count_current; break; }
-        }
-        for (int slot = 0; slot < 21; ++slot) {
-            if (mgr->stack[1][slot].count_current > 0) { before_cnt1 = mgr->stack[1][slot].count_current; break; }
-        }
-        before_spell0 = mgr->hero_casted[0];
-    }
-
-    int prev_ranged = s_ranged_overlay_panel.GetRangedValue(0);
-    int prev_spell = s_ranged_overlay_panel.GetSpellValue(0);
-    WriteLog("[Hook_CombatCastSpell] #%d at (%d,%d) before: ranged=%d spell=%d cnt0=%d cnt1=%d hero_casted[0]=%d dirty=%d",
-        s_cast_count, x, y, prev_ranged, prev_spell, before_cnt0, before_cnt1, before_spell0, s_ranged_overlay_panel.IsDirty());
-
     THISCALL_3(void, h->GetDefaultFunc(), mgr, x, y);
-
-    // 诊断：施法后立刻读取 count_current
-    int after_cnt0 = 0, after_cnt1 = 0, after_spell0 = 0;
-    if (mgr) {
-        for (int slot = 0; slot < 21; ++slot) {
-            if (mgr->stack[0][slot].count_current > 0) { after_cnt0 = mgr->stack[0][slot].count_current; break; }
-        }
-        for (int slot = 0; slot < 21; ++slot) {
-            if (mgr->stack[1][slot].count_current > 0) { after_cnt1 = mgr->stack[1][slot].count_current; break; }
-        }
-        after_spell0 = mgr->hero_casted[0];
-    }
-    WriteLog("[Hook_CombatCastSpell] #%d after: cnt0=%d->%d cnt1=%d->%d hero_casted[0]=%d->%d",
-        s_cast_count, before_cnt0, after_cnt0, before_cnt1, after_cnt1, before_spell0, after_spell0);
-
     MarkRangedPanelDirty("spell cast");
-
-    int after_ranged = s_ranged_overlay_panel.GetRangedValue(0);
-    int after_spell = s_ranged_overlay_panel.GetSpellValue(0);
-    WriteLog("[Hook_CombatCastSpell] #%d panel: ranged=%d->%d spell=%d->%d dirty=%d",
-        s_cast_count, prev_ranged, after_ranged, prev_spell, after_spell, s_ranged_overlay_panel.IsDirty());
-
     return 0;
 }
