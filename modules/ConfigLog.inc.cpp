@@ -245,3 +245,43 @@ static void ReadConfig()
         cfg.row_y[i] = ClampInt(cfg.row_y[i], 0, cfg.ranged_panel_height - 17);
     cfg.fight_value_y_offset = ClampInt(cfg.fight_value_y_offset, -40, 80);
 }
+
+// ========== 日志输出 ==========
+
+static void AppendUtf8LogLine(const char* text)
+{
+    if (g_disable_log) return;
+    if (!g_log_path_w[0]) return;
+    HANDLE h = CreateFileW(g_log_path_w, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return;
+    LARGE_INTEGER pos;
+    pos.QuadPart = 0;
+    if (SetFilePointerEx(h, pos, &pos, FILE_END) && pos.QuadPart == 0) {
+        DWORD written = 0;
+        const unsigned char bom[3] = { 0xEF, 0xBB, 0xBF };
+        WriteFile(h, bom, 3, &written, nullptr);
+    }
+    DWORD written = 0;
+    WriteFile(h, text, (DWORD)strlen(text), &written, nullptr);
+    WriteFile(h, "\r\n", 2, &written, nullptr);
+    CloseHandle(h);
+}
+
+static void WriteLog(const char* fmt, ...)
+{
+    if (g_disable_log) return;
+    char line[1024];
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    int off = _snprintf(line, sizeof(line) - 1, "[%04u-%02u-%02u %02u:%02u:%02u.%03u] ",
+        st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+    if (off < 0) off = 0;
+    if (off >= (int)sizeof(line)) off = (int)sizeof(line) - 1;
+
+    va_list ap;
+    va_start(ap, fmt);
+    _vsnprintf(line + off, sizeof(line) - off - 1, fmt, ap);
+    va_end(ap);
+    line[sizeof(line) - 1] = 0;
+    AppendUtf8LogLine(line);
+}
