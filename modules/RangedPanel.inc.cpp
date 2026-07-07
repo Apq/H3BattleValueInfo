@@ -967,19 +967,19 @@ public:
         int panel_h = cfg.ranged_panel_height;
         int text_h = 17;
 
-        // 坐标计算：吸附到对话框内部左上角（避免被状态栏覆盖）
+        // 坐标计算：吸附到战场对话框上方中间（内部）
         int x, y;
         if (dlg && dlg->width > 0 && dlg->height > 0) {
-            // 吸附到对话框内部左上角，偏移 8 像素
-            x = dlg->x + 8;
-            y = dlg->y + 8;
+            // 面板居中于对话框内部上方
+            x = dlg->x + (dlg->width - panel_w) / 2;
+            y = dlg->y + 8;  // 对话框内部顶部，偏移 8 像素
         } else {
-            // 备用：战场区域左上角
+            // 备用：战场区域上方居中
             int battle_x = (screen->width - 800) / 2;
             int battle_y = (screen->height - 600) / 2;
             if (battle_x < 0) battle_x = 0;
             if (battle_y < 0) battle_y = 0;
-            x = battle_x + 8;
+            x = battle_x + (800 - panel_w) / 2;
             y = battle_y + 8;
         }
         if (x < 0) x = 0;
@@ -993,50 +993,6 @@ public:
         EnsureBackground();
         Recalculate(mgr);
         if (!bg_) return;
-
-        // 测试：画红色边框确认绘制是否正确
-        static int s_test_border = 0;
-        if (s_test_border < 3) {
-            ++s_test_border;
-            // 在面板区域画一个明显的红色边框
-            DDSURFACEDESC desc;
-            memset(&desc, 0, sizeof(desc));
-            desc.dwSize = sizeof(desc);
-            HRESULT hr = o_DDSurfaceBackBuffer->Lock(nullptr, &desc, DDLOCK_WAIT | DDLOCK_SURFACEMEMORYPTR, nullptr);
-            if (SUCCEEDED(hr) && desc.lpSurface) {
-                int bpp = GetBackBufferBpp(o_DDSurfaceBackBuffer);
-                WriteLog("[TestBorder] #%d bpp=%d x=%d y=%d w=%d h=%d", s_test_border, bpp, x, y, panel_w, panel_h);
-                // 画红色边框 (R=255, G=0, B=0)
-                _dword_ red = (bpp == 32) ? 0x00FF0000 : (_dword_)RGB(255, 0, 0);
-                for (int i = 0; i < panel_w && y + i < (int)desc.dwHeight; ++i) {
-                    if (bpp == 32) {
-                        _dword_* row = (_dword_*)((_byte_*)desc.lpSurface + y * desc.lPitch) + (x + i);
-                        *row = red;  // 上边框
-                        row = (_dword_*)((_byte_*)desc.lpSurface + (y + panel_h - 1) * desc.lPitch) + (x + i);
-                        *row = red;  // 下边框
-                    } else {
-                        _word_* row = (_word_*)((_byte_*)desc.lpSurface + y * desc.lPitch) + (x + i);
-                        *row = (uint16_t)red;
-                        row = (_word_*)((_byte_*)desc.lpSurface + (y + panel_h - 1) * desc.lPitch) + (x + i);
-                        *row = (uint16_t)red;
-                    }
-                }
-                for (int i = 0; i < panel_h && x + i < (int)desc.dwWidth; ++i) {
-                    if (bpp == 32) {
-                        _dword_* col = (_dword_*)((_byte_*)desc.lpSurface + (y + i) * desc.lPitch) + x;
-                        *col = red;  // 左边框
-                        col = (_dword_*)((_byte_*)desc.lpSurface + (y + i) * desc.lPitch) + (x + panel_w - 1);
-                        *col = red;  // 右边框
-                    } else {
-                        _word_* col = (_word_*)((_byte_*)desc.lpSurface + (y + i) * desc.lPitch) + x;
-                        *col = (uint16_t)red;
-                        col = (_word_*)((_byte_*)desc.lpSurface + (y + i) * desc.lPitch) + (x + panel_w - 1);
-                        *col = (uint16_t)red;
-                    }
-                }
-                o_DDSurfaceBackBuffer->Unlock(nullptr);
-            }
-        }
 
         // 1. 画背景到 backbuffer（不透明，完全覆盖目标区域）
         bool ok_bg = DrawPcx16ToBackBuffer(bg_, x, y, false);
