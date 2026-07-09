@@ -8,6 +8,7 @@ if (-not (Test-Path $packsDst)) {
 }
 Copy-Item "$src\BattleValueInfo.dll" $packsDst -Force
 Copy-Item "$PSScriptRoot\BattleValueInfo.ini" $packsDst -Force
+Copy-Item "$PSScriptRoot\使用说明.txt" $packsDst -Force
 
 $imgSrc = "$PSScriptRoot\img"
 $imgDst = "$packsDst\img"
