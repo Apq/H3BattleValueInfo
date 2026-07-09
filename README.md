@@ -90,7 +90,7 @@ Release\BattleValueInfo.dll
 默认部署到：
 
 ```text
-D:\Heroes3\Heroes3_2026.05.01\_HD3_Data\Packs\战斗价值信息
+D:\Heroes3\Heroes3_2026.05.01\_HD3_Data\Packs\远优对比
 ```
 
 部署内容包括 DLL、配置文件和 `img` 目录资源。

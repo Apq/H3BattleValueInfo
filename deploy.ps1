@@ -1,5 +1,5 @@
 $gameDir = 'D:\Heroes3\Heroes3_2026.05.01'
-$packsDst = "$gameDir\_HD3_Data\Packs\战斗价值信息"
+$packsDst = "$gameDir\_HD3_Data\Packs\远优对比"
 $src = "$PSScriptRoot\Release"
 
 # --- BattleValueInfo 插件 ---

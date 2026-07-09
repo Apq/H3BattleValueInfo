@@ -451,11 +451,11 @@ static _Pcx16_* CreatePcx16Background(const char* pcx_path)
 
     _Pcx16_* pcx = _Pcx16_::Create(w, h);
     if (!pcx || !pcx->buffer) {
-        WriteLog("[CreatePcx16BG] Create FAILED w=%d h=%d scanline=%d", w, h, pcx ? pcx->scanlineSize : 0);
+        //WriteLog("[CreatePcx16BG] Create FAILED w=%d h=%d scanline=%d", w, h, pcx ? pcx->scanlineSize : 0);
         free(raw); return nullptr;
     }
-    WriteLog("[CreatePcx16BG] Create OK w=%d h=%d scanlineSize=%d mode=%s",
-        w, h, pcx->scanlineSize, H3BitMode::Get() == 4 ? "32bpp" : "16bpp");
+    //WriteLog("[CreatePcx16BG] Create OK w=%d h=%d scanlineSize=%d mode=%s",
+    //    w, h, pcx->scanlineSize, H3BitMode::Get() == 4 ? "32bpp" : "16bpp");
 
     if (H3BitMode::Get() == 4) {
         // 32-bit ARGB8888 模式
@@ -470,22 +470,22 @@ static _Pcx16_* CreatePcx16Background(const char* pcx_path)
         // 打印调试信息
         _dword_* firstRow = (_dword_*)(pcx->buffer);
         _dword_* midRow = (_dword_*)(pcx->buffer + (h/2) * pcx->scanlineSize);
-        WriteLog("[CreatePcx16BG] first pixels: [%08X, %08X, %08X, %08X]",
-            firstRow[0], firstRow[1], firstRow[2], firstRow[3]);
-        WriteLog("[CreatePcx16BG] mid pixels: [%08X, %08X, %08X, %08X]",
-            midRow[0], midRow[1], midRow[2], midRow[3]);
+        //WriteLog("[CreatePcx16BG] first pixels: [%08X, %08X, %08X, %08X]",
+        //    firstRow[0], firstRow[1], firstRow[2], firstRow[3]);
+        //WriteLog("[CreatePcx16BG] mid pixels: [%08X, %08X, %08X, %08X]",
+        //    midRow[0], midRow[1], midRow[2], midRow[3]);
         bool allSame = true;
         _dword_ firstPix = firstRow[0];
         for (int i = 0; i < w && allSame; ++i) if (firstRow[i] != firstPix) allSame = false;
-        WriteLog("[CreatePcx16BG] first row allSame=%d palette sample: [%02X%02X%02X, %02X%02X%02X, %02X%02X%02X]",
-            allSame ? 1 : 0,
-            pal[0], pal[1], pal[2], pal[3], pal[4], pal[5], pal[6], pal[7], pal[8]);
+        //WriteLog("[CreatePcx16BG] first row allSame=%d palette sample: [%02X%02X%02X, %02X%02X%02X, %02X%02X%02X]",
+        //    allSame ? 1 : 0,
+        //    pal[0], pal[1], pal[2], pal[3], pal[4], pal[5], pal[6], pal[7], pal[8]);
         bool anyWhite = false;
         for (int yy = 0; yy < h && !anyWhite; ++yy) {
             _dword_* r = (_dword_*)(pcx->buffer + yy * pcx->scanlineSize);
             for (int xx = 0; xx < w && !anyWhite; ++xx) if ((r[xx] & 0x00FFFFFF) >= 0x00C0C0C0) anyWhite = true;
         }
-        WriteLog("[CreatePcx16BG] anyWhitePixel=%d", anyWhite ? 1 : 0);
+        //WriteLog("[CreatePcx16BG] anyWhitePixel=%d", anyWhite ? 1 : 0);
     } else {
         // 16-bit RGB565 模式
         for (int y = 0; y < h; ++y) {
@@ -498,19 +498,19 @@ static _Pcx16_* CreatePcx16Background(const char* pcx_path)
         }
         // 打印前几个像素用于调试
         _word_* firstRow = (_word_*)(pcx->buffer);
-        WriteLog("[CreatePcx16BG] first pixels: [%04X, %04X, %04X, %04X]",
-            firstRow[0], firstRow[1], firstRow[2], firstRow[3]);
+        //WriteLog("[CreatePcx16BG] first pixels: [%04X, %04X, %04X, %04X]",
+        //    firstRow[0], firstRow[1], firstRow[2], firstRow[3]);
         // 打印中间行
         _word_* midRow = (_word_*)(pcx->buffer + (h/2) * pcx->scanlineSize);
-        WriteLog("[CreatePcx16BG] mid pixels: [%04X, %04X, %04X, %04X]",
-            midRow[0], midRow[1], midRow[2], midRow[3]);
+        //WriteLog("[CreatePcx16BG] mid pixels: [%04X, %04X, %04X, %04X]",
+        //    midRow[0], midRow[1], midRow[2], midRow[3]);
         // 检查是否有不同颜色
         bool allSame = true;
         _word_ firstPix = firstRow[0];
         for (int i = 0; i < w && allSame; ++i) if (firstRow[i] != firstPix) allSame = false;
-        WriteLog("[CreatePcx16BG] first row allSame=%d palette sample: [%02X%02X%02X, %02X%02X%02X, %02X%02X%02X]",
-            allSame ? 1 : 0,
-            pal[0], pal[1], pal[2], pal[3], pal[4], pal[5], pal[6], pal[7], pal[8]);
+        //WriteLog("[CreatePcx16BG] first row allSame=%d palette sample: [%02X%02X%02X, %02X%02X%02X, %02X%02X%02X]",
+        //    allSame ? 1 : 0,
+        //    pal[0], pal[1], pal[2], pal[3], pal[4], pal[5], pal[6], pal[7], pal[8]);
     }
 
     free(raw);
@@ -758,8 +758,8 @@ static bool DrawPcx16ToBackBuffer(_Pcx16_* src, int dst_x, int dst_y, bool skip_
     if (!src || !src->buffer || !o_DDSurfaceBackBuffer) return false;
     static int s_call_idx = 0;
     int call_idx = s_call_idx++;
-    WriteLog("[DrawBB] #%d src=%p(%dx%d) dst=(%d,%d) skip=%d",
-        call_idx, (void*)src, src->width, src->height, dst_x, dst_y, skip_sentinel ? 1 : 0);
+    //WriteLog("[DrawBB] #%d src=%p(%dx%d) dst=(%d,%d) skip=%d",
+    //    call_idx, (void*)src, src->width, src->height, dst_x, dst_y, skip_sentinel ? 1 : 0);
 
     __try {
         DDSURFACEDESC desc;
@@ -841,12 +841,12 @@ static bool DrawPcx16ToBackBuffer(_Pcx16_* src, int dst_x, int dst_y, bool skip_
         }
 
         bool ok = copy_w > 0 && copy_h > 0;
-        WriteLog("[DrawBB] #%d LockOK bpp=%d clip_ok copy_w=%d copy_h=%d ret=%d",
-            call_idx, bpp, copy_w, copy_h, ok);
+        //WriteLog("[DrawBB] #%d LockOK bpp=%d clip_ok copy_w=%d copy_h=%d ret=%d",
+        //    call_idx, bpp, copy_w, copy_h, ok);
         o_DDSurfaceBackBuffer->Unlock(nullptr);
         return ok;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        WriteLog("[DrawBB] #%d EXCEPTION", call_idx);
+        //WriteLog("[DrawBB] #%d EXCEPTION", call_idx);
         return false;
     }
 }
@@ -1055,8 +1055,8 @@ public:
         if (y + panel_h < 0) return;  // 面板完全在屏幕上方，不画
         if (y < 0) y = 0;  // 面板顶部超出屏幕，从屏幕顶开始画
 
-        WriteLog("[DrawImpl] panel_w=%d panel_h=%d dlg=%p x=%d y=%d bg_=%p",
-            panel_w, panel_h, (void*)dlg, x, y, (void*)bg_);
+        //WriteLog("[DrawImpl] panel_w=%d panel_h=%d dlg=%p x=%d y=%d bg_=%p",
+        //    panel_w, panel_h, (void*)dlg, x, y, (void*)bg_);
 
         EnsureBackground();
         Recalculate(mgr);

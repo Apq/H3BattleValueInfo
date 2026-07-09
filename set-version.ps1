@@ -72,9 +72,16 @@ if ($Major -lt 0 -or $Minor -lt 0) {
     $text = $RcEncoding.GetString([System.IO.File]::ReadAllBytes($rc))
     $current = Get-VersionParts $text
     Write-Host "Current version: $($current.Major).$($current.Minor).$($current.Year).$($current.Date)"
-    Write-Host 'Usage: .\set-version.ps1 <major> <minor> [-DryRun]'
-    Write-Host 'Example: .\set-version.ps1 0 6'
-    exit 2
+    if ($Major -lt 0) {
+        $Major = Read-Host 'Major version'
+        if ($Major -notmatch '^\d+$') { throw 'Invalid major version'; }
+        $Major = [int]$Major
+    }
+    if ($Minor -lt 0) {
+        $Minor = Read-Host 'Minor version'
+        if ($Minor -notmatch '^\d+$') { throw 'Invalid minor version'; }
+        $Minor = [int]$Minor
+    }
 }
 
 $rcPathResolved = Resolve-RcPath $RcPath
