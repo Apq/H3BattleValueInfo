@@ -563,28 +563,29 @@ static bool DrawPcx16WithGDI(_Pcx16_* src, int screen_x, int screen_y)
 
         HGDIOBJ oldBmp = SelectObject(memDC, hBmp);
 
-        // 转换 16位/32位像素到 24位 BGR
+        // 转换 16位/32位像素到 24位 BGR（DIB stride = w * 3，无 padding）
         int bpp = H3BitMode::Get() == 4 ? 32 : 16;
+        int src_sl = src->scanlineSize;
         if (bpp == 16) {
             for (int y = 0; y < h; ++y) {
-                _word_* src_row = (_word_*)((_byte_*)src->buffer + y * src->scanlineSize);
+                _word_* src_row = (_word_*)((_byte_*)src->buffer + y * src_sl);
                 _byte_* dst_row = (_byte_*)bits + y * (w * 3);
                 for (int x = 0; x < w; ++x) {
                     _word_ c565 = src_row[x];
-                    dst_row[x * 3 + 0] = ((c565 & 0x1F) << 3);           // B
-                    dst_row[x * 3 + 1] = ((c565 >> 5) & 0x3F) << 2;     // G
-                    dst_row[x * 3 + 2] = ((c565 >> 11) & 0x1F) << 3;    // R
+                    dst_row[x * 3 + 0] = ((c565 & 0x1F) << 3);
+                    dst_row[x * 3 + 1] = ((c565 >> 5) & 0x3F) << 2;
+                    dst_row[x * 3 + 2] = ((c565 >> 11) & 0x1F) << 3;
                 }
             }
         } else {
             for (int y = 0; y < h; ++y) {
-                _dword_* src_row = (_dword_*)((_byte_*)src->buffer + y * src->scanlineSize);
+                _dword_* src_row = (_dword_*)((_byte_*)src->buffer + y * src_sl);
                 _byte_* dst_row = (_byte_*)bits + y * (w * 3);
                 for (int x = 0; x < w; ++x) {
                     _dword_ c = src_row[x];
-                    dst_row[x * 3 + 0] = c & 0xFF;                       // B
-                    dst_row[x * 3 + 1] = (c >> 8) & 0xFF;                 // G
-                    dst_row[x * 3 + 2] = (c >> 16) & 0xFF;               // R
+                    dst_row[x * 3 + 0] = c & 0xFF;
+                    dst_row[x * 3 + 1] = (c >> 8) & 0xFF;
+                    dst_row[x * 3 + 2] = (c >> 16) & 0xFF;
                 }
             }
         }
@@ -641,9 +642,10 @@ static bool DrawPcx16TextWithGDI(_Pcx16_* src, int screen_x, int screen_y)
         memset(bits, 0xFF, h * w * 3);
 
         int bpp = H3BitMode::Get() == 4 ? 32 : 16;
+        int src_sl = src->scanlineSize;
         if (bpp == 16) {
             for (int y = 0; y < h; ++y) {
-                _word_* src_row = (_word_*)((_byte_*)src->buffer + y * src->scanlineSize);
+                _word_* src_row = (_word_*)((_byte_*)src->buffer + y * src_sl);
                 _byte_* dst_row = (_byte_*)bits + y * (w * 3);
                 for (int x = 0; x < w; ++x) {
                     _word_ c565 = src_row[x];
@@ -656,7 +658,7 @@ static bool DrawPcx16TextWithGDI(_Pcx16_* src, int screen_x, int screen_y)
             }
         } else {
             for (int y = 0; y < h; ++y) {
-                _dword_* src_row = (_dword_*)((_byte_*)src->buffer + y * src->scanlineSize);
+                _dword_* src_row = (_dword_*)((_byte_*)src->buffer + y * src_sl);
                 _byte_* dst_row = (_byte_*)bits + y * (w * 3);
                 for (int x = 0; x < w; ++x) {
                     _dword_ c = src_row[x];
@@ -724,6 +726,7 @@ static bool DrawPcx16ToBackBuffer(_Pcx16_* src, int dst_x, int dst_y, bool skip_
         int bpp = GetBackBufferBpp(o_DDSurfaceBackBuffer);
         int dst_w = (int)desc.dwWidth;
         int dst_h = (int)desc.dwHeight;
+        int dst_lpitch = (int)desc.lPitch;
         if (dst_w <= 0) dst_w = o_WndMgr && o_WndMgr->screen_pcx16 ? o_WndMgr->screen_pcx16->width : 800;
         if (dst_h <= 0) dst_h = o_WndMgr && o_WndMgr->screen_pcx16 ? o_WndMgr->screen_pcx16->height : 600;
 
@@ -742,7 +745,7 @@ static bool DrawPcx16ToBackBuffer(_Pcx16_* src, int dst_x, int dst_y, bool skip_
                 _byte_* src_row = src->buffer + (src_y0 + y) * src->scanlineSize;
                 _byte_* dst_row = (_byte_*)desc.lpSurface + (dst_y + y) * desc.lPitch;
                 if (bpp == 32) {
-                    _dword_* d = (_dword_*)dst_row + dst_x;
+                    _dword_* d = (_dword_*)((_byte_*)desc.lpSurface + (dst_y + y) * dst_lpitch) + dst_x;
                     if (src32) {
                         _dword_* s = (_dword_*)src_row + src_x0;
                         for (int x = 0; x < copy_w; ++x) {
@@ -757,7 +760,7 @@ static bool DrawPcx16ToBackBuffer(_Pcx16_* src, int dst_x, int dst_y, bool skip_
                         }
                     }
                 } else {
-                    _word_* d = (_word_*)dst_row + dst_x;
+                    _word_* d = (_word_*)((_byte_*)desc.lpSurface + (dst_y + y) * dst_lpitch) + dst_x;
                     if (src32) {
                         _dword_* s = (_dword_*)src_row + src_x0;
                         for (int x = 0; x < copy_w; ++x) {
