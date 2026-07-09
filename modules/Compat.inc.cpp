@@ -203,6 +203,9 @@ struct _Spell_ {
 struct _WndMgr_ {
     char _pad0[0x40];
     _Pcx16_* screen_pcx16;
+    void H3Redraw(INT32 x, INT32 y, INT32 dx, INT32 dy) {
+        THISCALL_5(VOID, 0x603190, this, x, y, dx, dy);
+    }
 };
 
 struct _BattleMgr_ {
