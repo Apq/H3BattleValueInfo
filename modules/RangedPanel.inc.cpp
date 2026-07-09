@@ -450,7 +450,12 @@ static _Pcx16_* CreatePcx16Background(const char* pcx_path)
     if (!palFound) { free(raw); return nullptr; }
 
     _Pcx16_* pcx = _Pcx16_::Create(w, h);
-    if (!pcx || !pcx->buffer) { free(raw); return nullptr; }
+    if (!pcx || !pcx->buffer) {
+        WriteLog("[CreatePcx16BG] Create FAILED w=%d h=%d scanline=%d", w, h, pcx ? pcx->scanlineSize : 0);
+        free(raw); return nullptr;
+    }
+    WriteLog("[CreatePcx16BG] Create OK w=%d h=%d scanlineSize=%d mode=%s",
+        w, h, pcx->scanlineSize, H3BitMode::Get() == 4 ? "32bpp" : "16bpp");
 
     if (H3BitMode::Get() == 4) {
         // 32-bit ARGB8888 模式
@@ -689,8 +694,16 @@ static int GetBackBufferBpp(LPDIRECTDRAWSURFACE surface)
     DDPIXELFORMAT pf;
     memset(&pf, 0, sizeof(pf));
     pf.dwSize = sizeof(pf);
-    if (SUCCEEDED(surface->GetPixelFormat(&pf)) && (pf.dwRGBBitCount == 16 || pf.dwRGBBitCount == 32))
-        return (int)pf.dwRGBBitCount;
+    if (SUCCEEDED(surface->GetPixelFormat(&pf))) {
+        static int s_logged = 0;
+        if (s_logged < 3) {
+            ++s_logged;
+            WriteLog("[DrawBG] PixelFormat bpp=%d R=0x%08X G=0x%08X B=0x%08X A=0x%08X",
+                pf.dwRGBBitCount, pf.dwRBitMask, pf.dwGBitMask, pf.dwBBitMask, pf.dwRGBAlphaBitMask);
+        }
+        if (pf.dwRGBBitCount == 16 || pf.dwRGBBitCount == 32)
+            return (int)pf.dwRGBBitCount;
+    }
     return H3BitMode::Get() == 4 ? 32 : 16;
 }
 
@@ -716,12 +729,18 @@ static bool DrawPcx16ToBackBuffer(_Pcx16_* src, int dst_x, int dst_y, bool skip_
 {
     if (!src || !src->buffer || !o_DDSurfaceBackBuffer) return false;
 
+    static int s_draw_count = 0;
+    ++s_draw_count;
+
     __try {
         DDSURFACEDESC desc;
         memset(&desc, 0, sizeof(desc));
         desc.dwSize = sizeof(desc);
         HRESULT hr = o_DDSurfaceBackBuffer->Lock(nullptr, &desc, DDLOCK_WAIT | DDLOCK_SURFACEMEMORYPTR, nullptr);
-        if (FAILED(hr) || !desc.lpSurface) return false;
+        if (FAILED(hr) || !desc.lpSurface) {
+            WriteLog("[DrawBG] #%d Lock FAILED hr=0x%08X surface=%p", s_draw_count, hr, desc.lpSurface);
+            return false;
+        }
 
         int bpp = GetBackBufferBpp(o_DDSurfaceBackBuffer);
         int dst_w = (int)desc.dwWidth;
@@ -729,6 +748,23 @@ static bool DrawPcx16ToBackBuffer(_Pcx16_* src, int dst_x, int dst_y, bool skip_
         int dst_lpitch = (int)desc.lPitch;
         if (dst_w <= 0) dst_w = o_WndMgr && o_WndMgr->screen_pcx16 ? o_WndMgr->screen_pcx16->width : 800;
         if (dst_h <= 0) dst_h = o_WndMgr && o_WndMgr->screen_pcx16 ? o_WndMgr->screen_pcx16->height : 600;
+
+        if (s_draw_count <= 5) {
+            WriteLog("[DrawBG] #%d bpp=%d lPitch=%d dst=(%d,%d) src=%dx%d skipSentinel=%d lPitch/w*bpp=%d",
+                s_draw_count, bpp, dst_lpitch, dst_x, dst_y, src->width, src->height, skip_sentinel, dst_w * bpp / 8);
+        }
+        if (s_draw_count <= 3 && !skip_sentinel) {
+            // Dump first 3 pixels of backbuffer to detect actual format
+            _byte_* bb = (_byte_*)desc.lpSurface;
+            _byte_* bb4 = (_byte_*)desc.lpSurface + 1 * (bpp / 8);
+            _byte_* bb8 = (_byte_*)desc.lpSurface + 2 * (bpp / 8);
+            WriteLog("[DrawBG] #%d BB_pixel_dump px0=[%02X%02X%02X%02X] px1=[%02X%02X%02X%02X] px2=[%02X%02X%02X%02X] bb16=%04X",
+                s_draw_count,
+                bb[0], bb[1], bb[2], bb[3],
+                bb4[0], bb4[1], bb4[2], bb4[3],
+                bb8[0], bb8[1], bb8[2], bb8[3],
+                *(_word_*)bb);
+        }
 
         int src_x0 = 0;
         int src_y0 = 0;
@@ -741,22 +777,39 @@ static bool DrawPcx16ToBackBuffer(_Pcx16_* src, int dst_x, int dst_y, bool skip_
 
         if (copy_w > 0 && copy_h > 0) {
             bool src32 = H3BitMode::Get() == 4;
+            if (s_draw_count <= 5) {
+                WriteLog("[DrawBG] #%d src32=%d copy=(%d,%d) at(%d,%d) lpSurface=%p",
+                    s_draw_count, src32, copy_w, copy_h, dst_x, dst_y, desc.lpSurface);
+            }
             for (int y = 0; y < copy_h; ++y) {
                 _byte_* src_row = src->buffer + (src_y0 + y) * src->scanlineSize;
                 _byte_* dst_row = (_byte_*)desc.lpSurface + (dst_y + y) * desc.lPitch;
                 if (bpp == 32) {
-                    _dword_* d = (_dword_*)((_byte_*)desc.lpSurface + (dst_y + y) * dst_lpitch) + dst_x;
+                    // backbuffer 是 XRGB8888（4字节/pixel，X=0xFF 无意义，仅作对齐）
+                    // src 是 ARGB8888。必须按字节写，只复制 RGB，alpha 丢弃（保持 backbuffer X=0xFF）
+                    _byte_* d = (_byte_*)desc.lpSurface + (dst_y + y) * dst_lpitch + dst_x * 4;
                     if (src32) {
-                        _dword_* s = (_dword_*)src_row + src_x0;
                         for (int x = 0; x < copy_w; ++x) {
-                            _dword_ c = s[x];
-                            if (!skip_sentinel || c != TEXT_MASK_SENTINEL_8888) d[x] = c;
+                            // 用中间变量避免 strict-aliasing 问题
+                            _dword_ tmp = *(_dword_*)((_byte_*)src_row + src_x0 * 4 + x * 4);
+                            if (!skip_sentinel || tmp != TEXT_MASK_SENTINEL_8888) {
+                                d[x * 4 + 0] = (_byte_)tmp;       // B
+                                d[x * 4 + 1] = (_byte_)(tmp >> 8); // G
+                                d[x * 4 + 2] = (_byte_)(tmp >> 16); // R
+                                // X 通道（d[x*4+3]）保持 0xFF 不变
+                            }
                         }
                     } else {
+                        // 16bpp src → XRGB8888 backbuffer
                         _word_* s = (_word_*)src_row + src_x0;
                         for (int x = 0; x < copy_w; ++x) {
-                            _word_ c = s[x];
-                            if (!skip_sentinel || c != TEXT_MASK_SENTINEL_565) d[x] = RGB565To8888(c);
+                            _word_ c16 = s[x];
+                            if (!skip_sentinel || c16 != TEXT_MASK_SENTINEL_565) {
+                                d[x * 4 + 0] = ((c16 & 0x1F) << 3);             // B5→B8
+                                d[x * 4 + 1] = ((c16 >> 5) & 0x3F) << 2;        // G6→G8
+                                d[x * 4 + 2] = ((c16 >> 11) & 0x1F) << 3;       // R5→R8
+                                // X 通道保持 0xFF
+                            }
                         }
                     }
                 } else {
@@ -779,6 +832,9 @@ static bool DrawPcx16ToBackBuffer(_Pcx16_* src, int dst_x, int dst_y, bool skip_
         }
 
         o_DDSurfaceBackBuffer->Unlock(nullptr);
+        if (s_draw_count <= 5) {
+            WriteLog("[DrawBG] #%d OK ok_bg=%d copy=(%d,%d)", s_draw_count, copy_w > 0 && copy_h > 0, copy_w, copy_h);
+        }
         return copy_w > 0 && copy_h > 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
@@ -853,6 +909,15 @@ static void BuildRangedSideSummary(_BattleMgr_* mgr, int side, char* out, int ou
         out[out_size - 1] = 0;
     }
 }
+
+// 前向声明（供类内部使用）
+static LPDIRECTDRAWSURFACE CreateEmptyDDSurface(int w, int h);
+static bool CreateDDBackground(const char* pcx_path, LPDIRECTDRAWSURFACE surface, int* out_w, int* out_h);
+static void ClearScreenRegion(_Pcx16_* screen, int x, int y, int w, int h);
+static void SafeDrawTextToScreenPcx16(_Fnt_* font, _Pcx16_* screen, const char* text, int x, int y, int w, int h, int color, int align);
+static bool BltDDSurfaceToBackBuffer(LPDIRECTDRAWSURFACE src_surface, int dst_x, int dst_y, int w, int h);
+static bool CopyBackBufferToSurface(LPDIRECTDRAWSURFACE dst_surface, int src_x, int src_y, int w, int h);
+static bool RestoreSurfaceToBackBuffer(LPDIRECTDRAWSURFACE src_surface, int dst_x, int dst_y, int w, int h);
 
 class RangedOverlayPanel
 {
@@ -958,18 +1023,16 @@ public:
         if (!active_) return;
         if (suppressed_for_result_) return;
 
+        // 面板尺寸
         int panel_w = cfg.ranged_panel_width;
         int panel_h = cfg.ranged_panel_height;
-        int text_h = 17;
 
-        // 坐标计算：吸附到战场对话框上方中间（内部）
+        // 坐标计算
         int x, y;
         if (dlg && dlg->width > 0 && dlg->height > 0) {
-            // 面板居中于对话框内部上方
             x = dlg->x + (dlg->width - panel_w) / 2;
-            y = dlg->y + 8;  // 对话框内部顶部，偏移 8 像素
+            y = dlg->y + 8;
         } else {
-            // 备用：战场区域上方居中
             int battle_x = (screen->width - 800) / 2;
             int battle_y = (screen->height - 600) / 2;
             if (battle_x < 0) battle_x = 0;
@@ -980,23 +1043,51 @@ public:
         if (x < 0) x = 0;
         if (y < 0) y = 0;
 
+        EnsureBackground();
+        Recalculate(mgr);
+        if (!bg_) return;
+
+        // 1. 清除 screen_pcx16 面板区域
+        for (int row = y; row < y + panel_h; ++row) {
+            _word_* p = (_word_*)(screen->buffer + row * screen->scanlineSize) + x;
+            for (int col = 0; col < panel_w; ++col) p[col] = 0;
+        }
+
+        // 2. 画背景到 screen_pcx16（使用 H3LoadedPcx16::DrawToPcx16）
+        bg_->DrawToPcx16(x, y, FALSE, screen);
+
+        // 3. 计算文字位置
         int pad_x = 16;
         int mid_gap = 16;
         int col_w = (panel_w - pad_x * 2 - mid_gap) / 2;
         if (col_w < 40) col_w = panel_w / 2;
 
-        EnsureBackground();
-        Recalculate(mgr);
-        if (!bg_) return;
-
-        // 1. 画背景到 backbuffer（不透明，完全覆盖目标区域）
-        bool ok_bg = DrawPcx16ToBackBuffer(bg_, x, y, false);
-
-        // 2. 画文字到 text_mask_，再用 backbuffer 方式画到屏幕。
+        // 4. 画文字到 screen_pcx16
         _Fnt_* font = GetRangedPanelTextFont();
-        if (font && EnsureTextMask(&text_mask_, panel_w, panel_h)) {
-            // 使用 backbuffer 方式画文字（跳过透明像素）
-            DrawPcx16ToBackBuffer(text_mask_, x, y, true);
+        if (font) {
+            int text_y = y + 2;
+            int left_x = x + pad_x;
+            int right_x = x + pad_x + col_w + mid_gap;
+            int text_y_step = 18;
+
+            char tmp[64];
+
+            _snprintf(tmp, sizeof(tmp) - 1, "%d", ranged_value_[0]);
+            font->TextDraw(screen, tmp, left_x, text_y, col_w, text_y_step, NH3Dlg::eTextColor::RED, static_cast<NH3Dlg::eTextAlignment>(4) /* MIDDLE_LEFT */);
+            _snprintf(tmp, sizeof(tmp) - 1, "%d", ranged_value_[1]);
+            font->TextDraw(screen, tmp, right_x, text_y, col_w, text_y_step, NH3Dlg::eTextColor::RED, static_cast<NH3Dlg::eTextAlignment>(4) /* MIDDLE_LEFT */);
+            text_y += text_y_step;
+
+            _snprintf(tmp, sizeof(tmp) - 1, "%d", spell_value_[0]);
+            font->TextDraw(screen, tmp, left_x, text_y, col_w, text_y_step, NH3Dlg::eTextColor::RED, static_cast<NH3Dlg::eTextAlignment>(4) /* MIDDLE_LEFT */);
+            _snprintf(tmp, sizeof(tmp) - 1, "%d", spell_value_[1]);
+            font->TextDraw(screen, tmp, right_x, text_y, col_w, text_y_step, NH3Dlg::eTextColor::RED, static_cast<NH3Dlg::eTextAlignment>(4) /* MIDDLE_LEFT */);
+            text_y += text_y_step;
+
+            _snprintf(tmp, sizeof(tmp) - 1, "%d", total_value_[0]);
+            font->TextDraw(screen, tmp, left_x, text_y, col_w, text_y_step, NH3Dlg::eTextColor::RED, static_cast<NH3Dlg::eTextAlignment>(4) /* MIDDLE_LEFT */);
+            _snprintf(tmp, sizeof(tmp) - 1, "%d", total_value_[1]);
+            font->TextDraw(screen, tmp, right_x, text_y, col_w, text_y_step, NH3Dlg::eTextColor::RED, static_cast<NH3Dlg::eTextAlignment>(4) /* MIDDLE_LEFT */);
         }
     }
 
@@ -1033,17 +1124,18 @@ private:
 
     void EnsureBackground()
     {
-        if (!bg_ && !bg_load_failed_) {
-            char modulePath[MAX_PATH];
-            GetModuleFileNameA(g_hModule, modulePath, MAX_PATH);
-            char* slash = strrchr(modulePath, '\\');
-            if (slash) slash[1] = 0; else modulePath[0] = 0;
-            char path[2048];
-            _snprintf(path, sizeof(path) - 1, "%simg\\%s", modulePath, cfg.ranged_panel_image);
-            path[sizeof(path) - 1] = 0;
-            bg_ = CreatePcx16Background(path);
-            bg_load_failed_ = (bg_ == nullptr);
-        }
+        if (bg_ || bg_load_failed_) return;
+
+        char modulePath[MAX_PATH];
+        GetModuleFileNameA(g_hModule, modulePath, MAX_PATH);
+        char* slash = strrchr(modulePath, '\\');
+        if (slash) slash[1] = 0; else modulePath[0] = 0;
+        char path[2048];
+        _snprintf(path, sizeof(path) - 1, "%simg\\%s", modulePath, cfg.ranged_panel_image);
+        path[sizeof(path) - 1] = 0;
+
+        bg_ = CreatePcx16Background(path);
+        bg_load_failed_ = (bg_ == nullptr);
     }
 
     void ReleaseBackground()
@@ -1126,6 +1218,9 @@ private:
     int spell_value_[2];
     int total_value_[2];
 
+    // 双缓冲架构：screen_pcx16 直接绘制（HD 版 OpenGL 不支持 DD Blt）
+    // bg_ 是 _Pcx16_* 对象，直接用 DrawToPcx16 画到 screen
+
 public:
     // 诊断用 getter
     int GetRangedValue(int side) const { return (side >= 0 && side <= 1) ? ranged_value_[side] : 0; }
@@ -1154,6 +1249,178 @@ static _Fnt_* GetRangedPanelTextFont()
     if (_stricmp(name, "bigfont.fnt") == 0 || _stricmp(name, "bigfont") == 0) return H3Font::Load("bigfont.fnt");
     if (_stricmp(name, "calli10r.fnt") == 0 || _stricmp(name, "calli10r") == 0) return H3Font::Load("calli10r.fnt");
     return H3Font::Load("smalfont.fnt");
+}
+
+// ============================================================================
+// 文档方案：DD 离屏 Surface 架构
+// ============================================================================
+
+// 创建空离屏 DD surface（与 backbuffer 同像素格式）
+static LPDIRECTDRAWSURFACE CreateEmptyDDSurface(int w, int h)
+{
+    if (!o_DD || w <= 0 || h <= 0) return nullptr;
+    DDSURFACEDESC desc = {};
+    desc.dwSize = sizeof(desc);
+    desc.dwFlags = DDSD_WIDTH | DDSD_HEIGHT | DDSD_CAPS;
+    desc.dwWidth = w;
+    desc.dwHeight = h;
+    desc.ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN | DDSCAPS_SYSTEMMEMORY;
+    LPDIRECTDRAWSURFACE surface = nullptr;
+    HRESULT hr = o_DD->CreateSurface(&desc, &surface, nullptr);
+    if (FAILED(hr) || !surface) return nullptr;
+    return surface;
+}
+
+// 解码 PCX 并写入 DD surface（使用 backbuffer 的像素格式）
+static bool CreateDDBackground(const char* pcx_path, LPDIRECTDRAWSURFACE surface, int* out_w, int* out_h)
+{
+    if (!surface || !pcx_path) return false;
+    unsigned char* data = nullptr;
+    int size = 0;
+    if (!ReadWholeFile(pcx_path, &data, &size)) return false;
+    if (size < 128) { free(data); return false; }
+
+    int bpp = data[3];
+    int xmin = *(short*)(data + 4);
+    int ymin = *(short*)(data + 6);
+    int xmax = *(short*)(data + 8);
+    int ymax = *(short*)(data + 10);
+    int nplanes = data[65];
+    int bpl = *(short*)(data + 66);
+    int w = xmax - xmin + 1;
+    int h = ymax - ymin + 1;
+    if (w <= 0 || h <= 0 || w > 4096 || h > 4096) { free(data); return false; }
+    if (!(nplanes == 1 && bpp == 8)) { free(data); return false; }
+
+    int rawSize = bpl * h;
+    unsigned char* raw = (unsigned char*)malloc(rawSize);
+    if (!raw) { free(data); return nullptr; }
+
+    int pos = 128, rp = 0;
+    while (rp < rawSize && pos < size) {
+        unsigned char b = data[pos++];
+        if ((b & 0xC0) == 0xC0) {
+            int cnt = b & 0x3F;
+            if (pos >= size) break;
+            unsigned char val = data[pos++];
+            for (int i = 0; i < cnt && rp < rawSize; ++i) raw[rp++] = val;
+        } else {
+            raw[rp++] = b;
+        }
+    }
+    if (rp < rawSize) { free(raw); free(data); return false; }
+
+    unsigned char pal[768] = {0};
+    bool palFound = false;
+    if (size >= 769 && data[size - 769] == 0x0C) {
+        memcpy(pal, data + (size - 768), 768);
+        palFound = true;
+    }
+    if (!palFound) {
+        for (int i = size - 769; i >= 0; --i) {
+            if (data[i] == 0x0C && i + 768 < size) {
+                memcpy(pal, data + i + 1, 768);
+                palFound = true; break;
+            }
+        }
+    }
+    free(data);
+    if (!palFound) { free(raw); return false; }
+
+    // 写入 DD surface
+    DDSURFACEDESC desc = {};
+    desc.dwSize = sizeof(desc);
+    HRESULT hr = surface->Lock(nullptr, &desc, DDLOCK_WAIT | DDLOCK_SURFACEMEMORYPTR, nullptr);
+    if (FAILED(hr) || !desc.lpSurface) { free(raw); return false; }
+
+    int surf_bpp = GetBackBufferBpp(o_DDSurfaceBackBuffer);
+    if (surf_bpp == 32) {
+        // DD surface 是 BGRA 格式
+        for (int y = 0; y < h; ++y) {
+            _byte_* dst = (_byte_*)desc.lpSurface + y * desc.lPitch;
+            _byte_* src = raw + y * bpl;
+            for (int x = 0; x < w; ++x) {
+                unsigned char idx = src[x];
+                dst[x * 4 + 0] = pal[idx * 3 + 2];     // B
+                dst[x * 4 + 1] = pal[idx * 3 + 1];     // G
+                dst[x * 4 + 2] = pal[idx * 3 + 0];     // R
+                dst[x * 4 + 3] = 0;                     // A=0 (opaque)
+            }
+        }
+    } else {
+        // DD surface 是 RGB565
+        for (int y = 0; y < h; ++y) {
+            _word_* dst = (_word_*)((_byte_*)desc.lpSurface + y * desc.lPitch);
+            _byte_* src = raw + y * bpl;
+            for (int x = 0; x < w; ++x) {
+                unsigned char idx = src[x];
+                unsigned char r = pal[idx * 3];
+                unsigned char g = pal[idx * 3 + 1];
+                unsigned char b = pal[idx * 3 + 2];
+                dst[x] = (_word_)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
+            }
+        }
+    }
+    surface->Unlock(nullptr);
+    free(raw);
+    if (out_w) *out_w = w;
+    if (out_h) *out_h = h;
+    return true;
+}
+
+// 清除 screen_pcx16 面板区域（旧文字残留）
+static void ClearScreenRegion(_Pcx16_* screen, int x, int y, int w, int h)
+{
+    if (!screen || !screen->buffer || w <= 0 || h <= 0) return;
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > screen->width) w = screen->width - x;
+    if (y + h > screen->height) h = screen->height - y;
+    if (w <= 0 || h <= 0) return;
+
+    // screen_pcx16 假设 16bpp RGB565
+    for (int row = y; row < y + h; ++row) {
+        _word_* p = (_word_*)(screen->buffer + row * screen->scanlineSize) + x;
+        for (int col = 0; col < w; ++col) p[col] = 0;
+    }
+}
+
+// 文字画到 screen_pcx16（RGB565）
+static void SafeDrawTextToScreenPcx16(_Fnt_* font, _Pcx16_* screen, const char* text, int x, int y, int w, int h, int color, int align)
+{
+    if (!font || !screen || !screen->buffer || !text) return;
+    __try {
+        font->TextDraw(screen, text, x, y, w, h, (eTextColor)color, (eTextAlignment)align);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+
+// Blt DD surface 到 backbuffer
+static bool BltDDSurfaceToBackBuffer(LPDIRECTDRAWSURFACE src_surface, int dst_x, int dst_y, int w, int h)
+{
+    if (!src_surface || !o_DDSurfaceBackBuffer || w <= 0 || h <= 0) return false;
+    RECT src_rect = {0, 0, w, h};
+    RECT dst_rect = {dst_x, dst_y, dst_x + w, dst_y + h};
+    HRESULT hr = o_DDSurfaceBackBuffer->Blt(&dst_rect, src_surface, &src_rect, DDBLT_WAIT, nullptr);
+    return SUCCEEDED(hr);
+}
+
+// 从 backbuffer 保存 underlay
+static bool CopyBackBufferToSurface(LPDIRECTDRAWSURFACE dst_surface, int src_x, int src_y, int w, int h)
+{
+    if (!dst_surface || !o_DDSurfaceBackBuffer || w <= 0 || h <= 0) return false;
+    RECT src_rect = {src_x, src_y, src_x + w, src_y + h};
+    HRESULT hr = dst_surface->Blt(nullptr, o_DDSurfaceBackBuffer, &src_rect, DDBLT_WAIT, nullptr);
+    return SUCCEEDED(hr);
+}
+
+// 恢复 underlay 到 backbuffer
+static bool RestoreSurfaceToBackBuffer(LPDIRECTDRAWSURFACE src_surface, int dst_x, int dst_y, int w, int h)
+{
+    if (!src_surface || !o_DDSurfaceBackBuffer || w <= 0 || h <= 0) return false;
+    RECT src_rect = {0, 0, w, h};
+    RECT dst_rect = {dst_x, dst_y, dst_x + w, dst_y + h};
+    HRESULT hr = o_DDSurfaceBackBuffer->Blt(&dst_rect, src_surface, &src_rect, DDBLT_WAIT, nullptr);
+    return SUCCEEDED(hr);
 }
 
 static void MarkRangedPanelDirty(const char* reason)
@@ -1188,10 +1455,15 @@ int __stdcall Hook_AfterBlt(LoHook* h, HookContext* c)
 
 // Hook_CycleCombatScreen @ 0x495C50：战斗动画循环，每帧调用 Refresh()。
 // 这是比 0x493FC0 更内层的渲染点，CombatAnimation 插件也使用这个点。
+// 原函数调用后，backbuffer 已包含完整战场画面，在此处画面板不会被覆盖。
 int __stdcall Hook_CycleCombatScreen(HiHook* h, _BattleMgr_* mgr)
 {
-    // 先调用原函数
+    // 先调用原函数（渲染本帧）
     THISCALL_1(int, h->GetDefaultFunc(), mgr);
+    // 在渲染完成后画面板
+    if (s_ranged_overlay_panel.Active() && o_BattleMgr) {
+        UpdateRangedPanel(o_BattleMgr);
+    }
     return 0;
 }
 
