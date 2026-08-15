@@ -20,4 +20,4 @@ if (Test-Path $imgSrc) {
 }
 
 Write-Host "已部署到 $packsDst"
-Write-Host "注意：BattleValueInfo 依赖 MegaDesc，请先部署并启用 MegaDesc。"
+Write-Host "BattleValueInfo 仅负责战场远程/魔法输出对比；生物框和战斗价值由 MegaDesc 负责。"

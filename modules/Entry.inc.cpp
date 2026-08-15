@@ -10,11 +10,6 @@ static void StartPlugin()
 {
     WriteLog("BattleValueInfo 开始注册 Hook。");
 
-    // 生物信息窗口：只在 BUILD 阶段直接画战斗价值文字
-    _PI->WriteLoHook(0x5F4503, Hook_BuildCombat);
-    _PI->WriteLoHook(0x5F3E75, Hook_BuildAdventure);
-    _PI->WriteLoHook(0x5F491E, Hook_BuildTown);
-
     // 战斗动画循环 @ 0x495C50：每帧调用 Refresh()，画面板。
     // 这是比 0x493FC0 更内层的渲染点，CombatAnimation 插件也使用这个点。
     _PI->WriteHiHook(0x495C50, SPLICE_, EXTENDED_, THISCALL_, Hook_CycleCombatScreen);
@@ -26,7 +21,7 @@ static void StartPlugin()
     _PI->WriteHiHook(0x4781C0, SPLICE_, EXTENDED_, THISCALL_, Hook_CombatStartBattle);
     _PI->WriteHiHook(0x464F10, SPLICE_, EXTENDED_, THISCALL_, Hook_CombatCastSpell);
 
-    WriteLog("BattleValueInfo 已启用。Hook：FightValue(3), RangedPanel(1), RangedPanelEvents(2)。");
+    WriteLog("BattleValueInfo 已启用。Hook：RangedPanel(1), RangedPanelEvents(2)。");
 }
 
 // ========== DllMain ==========

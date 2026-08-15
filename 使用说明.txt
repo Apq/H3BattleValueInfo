@@ -6,12 +6,7 @@
 ----------------------------------------------
 本插件为《英雄无敌III》HD Mod 提供战斗输出能力对比功能：
 
-1. 生物信息窗口追加战斗价值
-   - 在 MegaDesc 扩展后的生物信息窗口中追加"战斗价值"一行
-   - 主值：单只生物的战斗价值
-   - 括号值：战斗中显示队首单只按剩余 HP 折算后的战斗价值
-
-2. 战斗输出对比面板
+1. 战斗输出对比面板
    - 在手动战斗时，战场框顶部上方显示对比面板
    - 显示本方与敌方两列数值
    - 三行内容：远程输出、魔法输出、总输出
@@ -28,17 +23,16 @@ img/
 三、安装方法
 ----------------------------------------------
 1. 确认已安装 HD Mod（插件依赖 HD Mod 加载机制）
-2. 确认已安装并启用 MegaDesc 插件
-3. 将本目录（包含 BattleValueInfo.dll、BattleValueInfo.ini、img\）复制到：
+2. 将本目录（包含 BattleValueInfo.dll、BattleValueInfo.ini、img\）复制到：
    <游戏目录>\_HD3_Data\Packs\远优对比\
    目录结构应为：
    _HD3_Data\Packs\远优对比\BattleValueInfo.dll
    _HD3_Data\Packs\远优对比\BattleValueInfo.ini
    _HD3_Data\Packs\远优对比\img\rp_bg.pcx
-4. 启动 HD Mod 启动器，进入"插件"页面
+3. 启动 HD Mod 启动器，进入"插件"页面
    - 在"未加载"列表中找到"远优对比"（或 BattleValueInfo）
    - 点击"→"按钮，将其添加到"已加载"列表
-5. 启动游戏，插件自动生效
+4. 启动游戏，插件自动生效
 
 
 四、配置说明（ BattleValueInfo.ini ）
@@ -53,12 +47,6 @@ Y=0                         ; Y 偏移，数值越大面板越往上
 Row1Y=24                    ; 第一行文字 Y 坐标
 Row2Y=42                    ; 第二行文字 Y 坐标
 Row3Y=60                    ; 第三行文字 Y 坐标
-
-[Layout]
-FightValueYOffset=8         ; 生物窗口战斗价值行 Y 偏移
-
-[Format]
-LabelFightValue=战斗价值     ; 生物窗口战斗价值标签文字
 
 [Logging]
 DisableLog=0                ; 1=禁用日志，0=启用日志
@@ -83,7 +71,6 @@ DisableLog=0                ; 1=禁用日志，0=启用日志
 六、兼容性
 ----------------------------------------------
 - 仅支持 HD Mod 环境
-- 依赖 MegaDesc 先安装并启用
 - 支持有/无远程单位的战斗
 - 支持有/无攻击魔法的英雄
 

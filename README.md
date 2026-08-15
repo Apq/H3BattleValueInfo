@@ -1,16 +1,11 @@
 # BattleValueInfo
 
-BattleValueInfo 是一个《英雄无敌3》HD Mod 插件，负责两件事：
+BattleValueInfo 是一个《英雄无敌3》HD Mod 插件，在手动战斗中于 800x600 战场框外部上方显示双方远程/魔法输出对比面板。
 
-1. 在 MegaDesc 扩展后的生物信息窗口中追加“战斗价值”。
-2. 在手动战斗中，在 800x600 战场框外部上方显示双方远程/魔法输出对比面板。
-
-本插件依赖 MegaDesc。生物信息窗口加高、背景替换、按钮替换、描述区扩展由 MegaDesc 负责。
+生物信息窗口的“战斗价值”第二行已迁移到 MegaDesc，本插件不再修改生物信息窗口。
 
 ## 功能
 
-- 生物信息窗口追加显示单只 `fight_value`。
-- 战斗中若能匹配当前 stack，会在括号内显示队首单只按剩余 HP 折算后的战斗价值。
 - 手动战斗中显示远程/魔法输出对比面板，三行分别为：
   - 远程输出
   - 魔法输出
@@ -36,9 +31,6 @@ BattleValueInfo 是一个《英雄无敌3》HD Mod 插件，负责两件事：
 [Logging]
 DisableLog=0
 
-[Layout]
-FightValueYOffset=8
-
 [RangedPanel]
 BackgroundImage=rp_bg.pcx
 TextFont=smalfont.fnt
@@ -50,8 +42,6 @@ Row1Y=24
 Row2Y=42
 Row3Y=60
 
-[Format]
-LabelFightValue=战斗价值
 ```
 
 `[RangedPanel] Y=0` 是推荐默认值。代码内部已有基础上移量 `RP_BASE_Y_OFFSET=23`，配置里的 `Y` 只用于微调；数值越大，面板越往上。
@@ -61,7 +51,6 @@ LabelFightValue=战斗价值
 ## 依赖
 
 - 英雄无敌3 HD Mod / patcher_x86
-- MegaDesc 插件
 - Visual Studio 18 / v145 工具集
 - Win32 / x86 Release 构建
 
@@ -81,7 +70,7 @@ Release\BattleValueInfo.dll
 
 ## 部署
 
-先部署并启用 MegaDesc，再部署本插件：
+执行部署脚本：
 
 ```powershell
 .\deploy.ps1
