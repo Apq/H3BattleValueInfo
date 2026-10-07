@@ -37,7 +37,7 @@ static int SafeCalcDamageBonuses(_BattleStack_* shooter, _BattleStack_* target, 
 static bool SafeDoesWearArtifact(_Hero_* hero, int art_id)
 {
     __try {
-        return THISCALL_2(bool, 0x4E2C90, hero, art_id);
+        return hero && hero->DoesWearArtifact(art_id);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
