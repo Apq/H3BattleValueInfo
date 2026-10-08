@@ -8,6 +8,7 @@
 #include <stdarg.h>
 #include <wchar.h>
 #include <stdint.h>
+#include "tests/TextLayoutRegression.hpp"
 
 using namespace h3;
 

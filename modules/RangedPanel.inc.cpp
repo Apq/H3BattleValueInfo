@@ -1,7 +1,16 @@
 // ========== 战场顶部远程输出面板 ==========
 // 核心逻辑：RangedOverlayPanel 类及所有相关计算、绘制函数。
 
+#include "TextLayout.hpp"
+
 static const int RP_BASE_Y_OFFSET = 23;
+
+static void FitRangedTextRect_(_Fnt_* font, _Pcx16_* target, int align, int& y, int& h)
+{
+    const bvi_layout::TextRect rect = bvi_layout::FitText(y, h, font->height, align);
+    h = rect.height;
+    y = bvi_layout::ClampOrigin(rect.y, h, target->height);
+}
 
 // 前向声明（供类内部使用）
 static _Fnt_* GetRangedPanelTextFont();
@@ -521,6 +530,7 @@ static void SafeDrawTextToScreen(_Fnt_* font, _Pcx16_* target, const char* text,
 {
     if (!font || !target || !text) return;
     __try {
+        FitRangedTextRect_(font, target, align, y, h);
         font->TextDraw(target, text, x, y, w, h, (eTextColor)color, (eTextAlignment)align);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         WriteLog("[RangedOverlayPanel] SEH exception during TextDraw text='%s' rect=(%d,%d,%d,%d)", text, x, y, w, h);
@@ -1035,7 +1045,10 @@ public:
 
         // 面板尺寸
         int panel_w = cfg.ranged_panel_width;
-        int panel_h = cfg.ranged_panel_height;
+        _Fnt_* font = GetRangedPanelTextFont();
+        const bvi_layout::Rows rows = bvi_layout::LayoutRows(cfg.row_y[0], cfg.row_y[1],
+            cfg.row_y[2], cfg.ranged_panel_height, font ? font->height : 1);
+        int panel_h = rows.panelHeight;
 
         // 坐标计算：面板居中于战场对话框顶部，背景紧贴边框，文字在框内
         int x, y;
@@ -1051,9 +1064,8 @@ public:
             y = battle_y - panel_h;
         }
         // 确保面板在屏幕可见范围内
-        if (x < 0) x = 0;
-        if (y + panel_h < 0) return;  // 面板完全在屏幕上方，不画
-        if (y < 0) y = 0;  // 面板顶部超出屏幕，从屏幕顶开始画
+        x = bvi_layout::ClampOrigin(x, panel_w, screen->width);
+        y = bvi_layout::ClampOrigin(y, panel_h, screen->height);
 
         //WriteLog("[DrawImpl] panel_w=%d panel_h=%d dlg=%p x=%d y=%d bg_=%p",
         //    panel_w, panel_h, (void*)dlg, x, y, (void*)bg_);
@@ -1069,41 +1081,60 @@ public:
         }
         if (!bg_composite_ || !bg_composite_->buffer) return;
 
-        // 复制背景图到合成图
+        // Remap the original row bands, including baked labels, to the fitted rows.
+        const int design_h = bvi_layout::RowGap(cfg.row_y[1] - cfg.row_y[0]);
+        const int dst_knots[5] = { 0, rows.y[0] + rows.height / 2,
+            rows.y[1] + rows.height / 2, rows.y[2] + rows.height / 2, panel_h };
+        int src_knots[5] = { 0, cfg.row_y[0] + design_h / 2,
+            cfg.row_y[1] + design_h / 2, cfg.row_y[2] + design_h / 2, cfg.ranged_panel_height };
+        const bool source_rows_valid = src_knots[1] > 0
+            && src_knots[2] > src_knots[1] && src_knots[3] > src_knots[2]
+            && src_knots[4] > src_knots[3];
+        if (!source_rows_valid) {
+            // Invalid row configuration cannot provide usable source texture bands.
+            for (int i = 1; i < 4; ++i)
+                src_knots[i] = cfg.ranged_panel_height * i / 4;
+        }
+        const int pixel_bytes = H3BitMode::Get() == 4 ? 4 : 2;
         for (int yy = 0; yy < panel_h; ++yy) {
-            _dword_* dst_row = (_dword_*)(bg_composite_->buffer + yy * bg_composite_->scanlineSize);
-            _dword_* src_row = (_dword_*)(bg_->buffer + yy * bg_->scanlineSize);
+            int band = 0;
+            while (band < 3 && yy >= dst_knots[band + 1]) ++band;
+            const int span = bvi_layout::Max(1, dst_knots[band + 1] - dst_knots[band]);
+            int sy = src_knots[band] + (yy - dst_knots[band]) *
+                (src_knots[band + 1] - src_knots[band]) / span;
+            sy = ClampInt(sy * bg_->height / cfg.ranged_panel_height, 0, bg_->height - 1);
+            _byte_* dst_row = bg_composite_->buffer + yy * bg_composite_->scanlineSize;
+            const _byte_* src_row = bg_->buffer + sy * bg_->scanlineSize;
             for (int xx = 0; xx < panel_w; ++xx) {
-                dst_row[xx] = src_row[xx];
+                const int sx = xx * bg_->width / panel_w;
+                memcpy(dst_row + xx * pixel_bytes, src_row + sx * pixel_bytes, pixel_bytes);
             }
         }
 
         // 2. 文字画到合成图
         // 面板宽度298，中线在149。左列右边界贴中线，右列左边界贴中线
         int left_col_x = 8;      // 左列起始 x
-        int left_col_w = 141;    // 左列宽度（右边界=149=中线）
-        int right_col_x = 154;    // 右列起始 x（左边界贴着中线）
-        int right_col_w = 144;    // 右列宽度（到面板右边界298）
-        int row_h = cfg.row_y[1] - cfg.row_y[0];  // 行高 = 第2行Y - 第1行Y
-
-        _Fnt_* font = GetRangedPanelTextFont();
+        int left_col_w = panel_w / 2 - left_col_x;
+        int right_col_x = panel_w / 2 + 5;
+        int right_col_w = panel_w - right_col_x;
+        int row_h = rows.height;
         if (font) {
             char tmp[64];
             // 左列数字：右对齐（数字末尾对齐到区域右边界，即中线）
             _snprintf(tmp, sizeof(tmp) - 1, "%d", ranged_value_[0]);
-            font->TextDraw(bg_composite_, tmp, left_col_x, cfg.row_y[0], left_col_w, row_h, NH3Dlg::eTextColor::WHITE, NH3Dlg::eTextAlignment::MIDDLE_RIGHT);
+            font->TextDraw(bg_composite_, tmp, left_col_x, rows.y[0], left_col_w, row_h, NH3Dlg::eTextColor::WHITE, NH3Dlg::eTextAlignment::MIDDLE_RIGHT);
             _snprintf(tmp, sizeof(tmp) - 1, "%d", spell_value_[0]);
-            font->TextDraw(bg_composite_, tmp, left_col_x, cfg.row_y[1], left_col_w, row_h, NH3Dlg::eTextColor::WHITE, NH3Dlg::eTextAlignment::MIDDLE_RIGHT);
+            font->TextDraw(bg_composite_, tmp, left_col_x, rows.y[1], left_col_w, row_h, NH3Dlg::eTextColor::WHITE, NH3Dlg::eTextAlignment::MIDDLE_RIGHT);
             _snprintf(tmp, sizeof(tmp) - 1, "%d", total_value_[0]);
-            font->TextDraw(bg_composite_, tmp, left_col_x, cfg.row_y[2], left_col_w, row_h, NH3Dlg::eTextColor::WHITE, NH3Dlg::eTextAlignment::MIDDLE_RIGHT);
+            font->TextDraw(bg_composite_, tmp, left_col_x, rows.y[2], left_col_w, row_h, NH3Dlg::eTextColor::WHITE, NH3Dlg::eTextAlignment::MIDDLE_RIGHT);
 
             // 右列数字：左对齐（数字从区域左侧开始）
             _snprintf(tmp, sizeof(tmp) - 1, "%d", ranged_value_[1]);
-            font->TextDraw(bg_composite_, tmp, right_col_x, cfg.row_y[0], right_col_w, row_h, NH3Dlg::eTextColor::WHITE, NH3Dlg::eTextAlignment::MIDDLE_LEFT);
+            font->TextDraw(bg_composite_, tmp, right_col_x, rows.y[0], right_col_w, row_h, NH3Dlg::eTextColor::WHITE, NH3Dlg::eTextAlignment::MIDDLE_LEFT);
             _snprintf(tmp, sizeof(tmp) - 1, "%d", spell_value_[1]);
-            font->TextDraw(bg_composite_, tmp, right_col_x, cfg.row_y[1], right_col_w, row_h, NH3Dlg::eTextColor::WHITE, NH3Dlg::eTextAlignment::MIDDLE_LEFT);
+            font->TextDraw(bg_composite_, tmp, right_col_x, rows.y[1], right_col_w, row_h, NH3Dlg::eTextColor::WHITE, NH3Dlg::eTextAlignment::MIDDLE_LEFT);
             _snprintf(tmp, sizeof(tmp) - 1, "%d", total_value_[1]);
-            font->TextDraw(bg_composite_, tmp, right_col_x, cfg.row_y[2], right_col_w, row_h, NH3Dlg::eTextColor::WHITE, NH3Dlg::eTextAlignment::MIDDLE_LEFT);
+            font->TextDraw(bg_composite_, tmp, right_col_x, rows.y[2], right_col_w, row_h, NH3Dlg::eTextColor::WHITE, NH3Dlg::eTextAlignment::MIDDLE_LEFT);
         }
 
         // 3. 一次 blt 合成图到 backbuffer
@@ -1423,6 +1454,7 @@ static void SafeDrawTextToScreenPcx16(_Fnt_* font, _Pcx16_* screen, const char* 
 {
     if (!font || !screen || !screen->buffer || !text) return;
     __try {
+        FitRangedTextRect_(font, screen, align, y, h);
         font->TextDraw(screen, text, x, y, w, h, (eTextColor)color, (eTextAlignment)align);
     } __except (EXCEPTION_EXECUTE_HANDLER) {}
 }
