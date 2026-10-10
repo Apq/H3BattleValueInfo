@@ -73,5 +73,6 @@ vcpkg_installed/
 Testing/
 .cache/
 .vs
-Release
+Release/*
+!Release/*.zip
 /BattleValueInfo
