@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Position = 0)]
     [int]$Major = -1,
     [Parameter(Position = 1)]
@@ -72,15 +72,17 @@ if ($Major -lt 0 -or $Minor -lt 0) {
     $text = $RcEncoding.GetString([System.IO.File]::ReadAllBytes($rc))
     $current = Get-VersionParts $text
     Write-Host "Current version: $($current.Major).$($current.Minor).$($current.Year).$($current.Date)"
+    # 双击 set-version.bat 无参运行时交互输入；stdin 被重定向（如 <nul）时
+    # Read-Host 返回空，按取消处理，不修改任何文件。
     if ($Major -lt 0) {
-        $Major = Read-Host 'Major version'
-        if ($Major -notmatch '^\d+$') { throw 'Invalid major version'; }
-        $Major = [int]$Major
+        $answer = Read-Host 'Major version'
+        if ($answer -notmatch '^\d+$') { Write-Host 'Canceled: no valid major version.'; exit 2 }
+        $Major = [int]$answer
     }
     if ($Minor -lt 0) {
-        $Minor = Read-Host 'Minor version'
-        if ($Minor -notmatch '^\d+$') { throw 'Invalid minor version'; }
-        $Minor = [int]$Minor
+        $answer = Read-Host 'Minor version'
+        if ($answer -notmatch '^\d+$') { Write-Host 'Canceled: no valid minor version.'; exit 2 }
+        $Minor = [int]$answer
     }
 }
 
